@@ -1,14 +1,18 @@
 /**
  * ConfigAutoSave Component
- * 
- * Automatically saves user configuration when selections change.
- * Also loads saved configuration on mount.
- * 
- * This component renders nothing - it only handles the save/load logic.
+ *
+ * Saves two kinds of state automatically:
+ * 1. Selection state (which printer/filament/process is chosen) → user_config.yaml
+ * 2. Process parameter overrides (edits made in the parameter panel) →
+ *    USER_WORKSPACE/autosave/process_config.json
+ *
+ * The process autosave is intentionally separate from the selection save so
+ * that parameter edits survive page refresh independently of profile switching.
  */
 
 import { useEffect, useRef } from 'react';
 import { useStore } from '../store';
+import { apiClient } from '../api/client';
 
 export const ConfigAutoSave: React.FC = () => {
   const {
@@ -17,6 +21,7 @@ export const ConfigAutoSave: React.FC = () => {
     selectedBedType,
     selectedProcessProfile,
     selectedFilamentProfiles,
+    overrides,
     loadUserConfig,
     saveUserConfig,
   } = useStore();
@@ -24,8 +29,11 @@ export const ConfigAutoSave: React.FC = () => {
   // Track if initial load has completed
   const hasLoadedRef = useRef(false);
   const isLoadingRef = useRef(false);
-  
-  // Load user config on mount
+  // Separate timers for selection save and process-override save
+  const selectionTimerRef   = useRef<ReturnType<typeof setTimeout> | null>(null);
+  const processTimerRef     = useRef<ReturnType<typeof setTimeout> | null>(null);
+
+  // ── 1. Load user config on mount ────────────────────────────────────────
   useEffect(() => {
     if (!hasLoadedRef.current && !isLoadingRef.current) {
       isLoadingRef.current = true;
@@ -36,28 +44,20 @@ export const ConfigAutoSave: React.FC = () => {
     }
   }, [loadUserConfig]);
 
-  // Auto-save whenever selections change (debounced to avoid excessive saves)
+  // ── 2. Auto-save selection state (debounced 500 ms) ─────────────────────
   useEffect(() => {
-    // Don't save until initial load is complete
-    if (!hasLoadedRef.current) {
-      console.log('Skipping save - waiting for initial config load');
-      return;
-    }
+    if (!hasLoadedRef.current) return;
+    if (!selectedManufacturer && !selectedPrinterProfile && !selectedBedType &&
+        !selectedProcessProfile && selectedFilamentProfiles.length === 0) return;
 
-    // Don't save if all values are null/empty (nothing selected)
-    if (!selectedManufacturer && !selectedPrinterProfile && !selectedBedType && 
-        !selectedProcessProfile && selectedFilamentProfiles.length === 0) {
-      console.log('Skipping save - no selections made');
-      return;
-    }
-
-    // Debounce the save to avoid saving on every keystroke/selection
-    const timeoutId = setTimeout(() => {
-      console.log('Auto-saving config...');
+    if (selectionTimerRef.current) clearTimeout(selectionTimerRef.current);
+    selectionTimerRef.current = setTimeout(() => {
       saveUserConfig();
-    }, 500); // 500ms debounce
+    }, 500);
 
-    return () => clearTimeout(timeoutId);
+    return () => {
+      if (selectionTimerRef.current) clearTimeout(selectionTimerRef.current);
+    };
   }, [
     selectedManufacturer,
     selectedPrinterProfile,
@@ -67,6 +67,30 @@ export const ConfigAutoSave: React.FC = () => {
     saveUserConfig,
   ]);
 
-  // This component renders nothing
+  // ── 3. Auto-save process parameter overrides (debounced 800 ms) ─────────
+  // Saves the full overrides dict to USER_WORKSPACE/autosave/process_config.json
+  // so parameter edits in the panel survive page refresh.
+  useEffect(() => {
+    if (!hasLoadedRef.current) return;
+    // Only save if there are actual overrides to persist
+    if (Object.keys(overrides).length === 0) return;
+
+    if (processTimerRef.current) clearTimeout(processTimerRef.current);
+    processTimerRef.current = setTimeout(() => {
+      const payload: Record<string, unknown> = { ...overrides };
+      // Embed the inherits reference so we know which profile these overrides
+      // belong to and can detect stale autosaves if the profile changes.
+      if (selectedProcessProfile) {
+        payload['_inherits'] = selectedProcessProfile.path;
+      }
+      apiClient.saveAutosave('process_config', payload)
+        .catch(err => console.error('Process config autosave failed:', err));
+    }, 800);
+
+    return () => {
+      if (processTimerRef.current) clearTimeout(processTimerRef.current);
+    };
+  }, [overrides, selectedProcessProfile]);
+
   return null;
 };

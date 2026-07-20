@@ -297,7 +297,7 @@ const FieldRow: React.FC<FieldRowProps> = ({
   return (
     <div className={`flex items-center gap-3 py-1.5 border-b border-gray-700/50 ${changed || pairedChanged ? 'bg-teal-900/10' : ''}`}>
       <span className={`w-56 flex-shrink-0 text-sm ${changed ? 'text-teal-300 font-medium' : 'text-gray-300'}`}>{def.label}</span>
-      <div className="flex items-center gap-2 flex-1">
+      <div className="flex items-center gap-2 flex-1 min-w-0">
         <TextInput
           value={firstVal(value)}
           onChange={v => onChange(def.key, Array.isArray(value) ? [v] : v)}
@@ -307,7 +307,7 @@ const FieldRow: React.FC<FieldRowProps> = ({
         {changed && <ResetBtn onClick={() => onReset(def.key)} />}
         {pairedDef && (
           <>
-            <span className="text-gray-500 text-xs">–</span>
+            <span className="text-gray-500 text-xs flex-shrink-0">–</span>
             <TextInput
               value={firstVal(pairedValue)}
               onChange={v => onChange(pairedDef.key, Array.isArray(pairedValue) ? [v] : v)}
@@ -317,7 +317,7 @@ const FieldRow: React.FC<FieldRowProps> = ({
             {pairedChanged && <ResetBtn onClick={() => onReset(pairedDef.key)} />}
           </>
         )}
-        {def.unit && <span className="text-xs text-gray-500 w-10 flex-shrink-0">{def.unit}</span>}
+        {def.unit && <span className="text-xs text-gray-500 flex-shrink-0">{def.unit}</span>}
       </div>
     </div>
   );
@@ -408,20 +408,16 @@ export const PrinterConfigDialog: React.FC<PrinterConfigDialogProps> = ({
       .catch(err => console.error('Failed to load printer config schema:', err));
   }, []);
 
-  // Load profile when dialog opens (both resolved and raw)
+  // Load profile when dialog opens.
+  // baseConfig = resolved selected profile + schema defaults (the "before" baseline).
+  // On open, we also try loading a prior autosave and overlay it on baseConfig so
+  // close → reopen preserves edits without an explicit Save.
   useEffect(() => {
     if (!isOpen || !profilePath || !schema) return;
     isFirstLoad.current = true;
     setLoading(true);
     setSaveStatus('idle');
 
-    const parts        = profilePath.split('/');
-    const manufacturer = parts[0];
-    const category     = parts[1];
-    const filename     = parts.slice(2).join('/');
-    setConfigName(filename.replace(/\.json$/, ''));
-
-    // Build schema-level defaults map
     const schemaDefaults: Record<string, unknown> = {};
     schema.tabs.forEach(tab =>
       tab.sections.forEach(sec =>
@@ -431,25 +427,61 @@ export const PrinterConfigDialog: React.FC<PrinterConfigDialogProps> = ({
       )
     );
 
-    Promise.all([
-      apiClient.getResolvedProfile(manufacturer, category, filename),
-      // Raw profile for inherits + detecting which keys are "owned" by this profile
-      fetch(`/api/profiles/${manufacturer}/${category}/${encodeURIComponent(filename)}`, {
-        headers: { Authorization: `Bearer ${localStorage.getItem('api_token') || ''}` },
-      }).then(r => r.json()),
-    ]).then(([resolved, raw]) => {
-      // Base = schema defaults ← overridden by resolved profile
-      const base = { ...schemaDefaults, ...resolved };
+    const authHeader = { Authorization: `Bearer ${localStorage.getItem('api_token') || ''}` };
+    const isUserConfig = profilePath.startsWith('user:');
+
+    const doLoad = async () => {
+      // ── 1. Resolve baseConfig from the currently selected profile ──────
+      let base: Record<string,unknown> = { ...schemaDefaults };
+      let effectiveInherits = '';
+
+      if (isUserConfig) {
+        const cfgName = profilePath.slice('user:'.length);
+        setConfigName(cfgName);
+        const userConfig: Record<string,unknown> = await apiClient.getPrinterConfig(cfgName, false);
+        const inherits = userConfig.inherits as string | undefined;
+        effectiveInherits = inherits ?? '';
+
+        if (inherits) {
+          const allProfiles: Array<{name:string;path:string}> = await fetch('/api/profiles', { headers: authHeader }).then(r => r.json());
+          const parent = allProfiles.find(p => p.name === inherits && p.path.includes('/machine/'));
+          if (parent) {
+            const pts = parent.path.split('/');
+            const resolved = await apiClient.getResolvedProfile(pts[0], pts[1], pts.slice(2).join('/'));
+            base = { ...base, ...resolved };
+          }
+        }
+        base = { ...base, ...userConfig };
+      } else {
+        const parts        = profilePath.split('/');
+        const manufacturer = parts[0];
+        const category     = parts[1];
+        const filename     = parts.slice(2).join('/');
+        setConfigName(filename.replace(/\.json$/, ''));
+
+        const [resolved, raw] = await Promise.all([
+          apiClient.getResolvedProfile(manufacturer, category, filename),
+          fetch(`/api/profiles/${manufacturer}/${category}/${encodeURIComponent(filename)}`, { headers: authHeader }).then(r => r.json()),
+        ]);
+        base = { ...base, ...resolved };
+        effectiveInherits = raw.name ?? raw.inherits ?? '';
+      }
+
       setBaseConfig(base);
-      setConfig({ ...base });
-      setInheritsValue(raw.name ?? raw.inherits ?? '');
-      setLoading(false);
-      isFirstLoad.current = false;
-    }).catch(err => {
-      console.error('Failed to load printer config:', err);
-      setLoading(false);
-      isFirstLoad.current = false;
-    });
+      setInheritsValue(effectiveInherits);
+
+      // ── 2. Try loading prior autosave — overlay on base ────────────────
+      try {
+        const autosaved = await apiClient.getAutosave('printer_config');
+        setConfig({ ...base, ...autosaved });
+      } catch {
+        setConfig({ ...base });
+      }
+    };
+
+    doLoad()
+      .catch(err => console.error('Failed to load printer config:', err))
+      .finally(() => { setLoading(false); isFirstLoad.current = false; });
   }, [isOpen, profilePath, schema]);
 
   // Compute changed keys (current vs base)
@@ -472,17 +504,17 @@ export const PrinterConfigDialog: React.FC<PrinterConfigDialogProps> = ({
     return payload;
   }, [config, changedKeys, inheritsValue]);
 
-  // Debounced autosave — saves only the diff
+  // Debounced autosave — saves only the diff to fixed name printer_config
   useEffect(() => {
-    if (isFirstLoad.current || !isOpen || !configName) return;
+    if (isFirstLoad.current || !isOpen || !profilePath) return;
     if (autosaveTimer.current) clearTimeout(autosaveTimer.current);
     autosaveTimer.current = setTimeout(() => {
       const payload = buildSavePayload();
-      apiClient.savePrinterConfig(configName, payload, true)
-        .catch(err => console.error('Autosave failed:', err));
+      apiClient.saveAutosave('printer_config', payload)
+        .catch(err => console.error('Printer autosave failed:', err));
     }, 800);
     return () => { if (autosaveTimer.current) clearTimeout(autosaveTimer.current); };
-  }, [config, isOpen, configName, buildSavePayload]);
+  }, [config, isOpen, profilePath, buildSavePayload]);
 
   const handleChange = useCallback((key: string, value: unknown) => {
     setConfig(prev => ({ ...prev, [key]: value }));

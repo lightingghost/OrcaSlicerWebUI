@@ -48,7 +48,7 @@ def _get_user_config_path(session_id: str = "default") -> Path:
     Returns:
         Path to user_config.yaml file
     """
-    config_dir = settings.workspace_root / "user_configs" / session_id
+    config_dir = settings.user_workspace_root / session_id
     config_dir.mkdir(parents=True, exist_ok=True)
     return config_dir / "user_config.yaml"
 
@@ -107,7 +107,7 @@ async def save_user_config(
     Returns:
         UserConfig: The saved configuration (echoed back)
         
-    The configuration is saved as YAML at workspace/user_configs/{session_id}/user_config.yaml
+    The configuration is saved as YAML at USER_WORKSPACE/{session_id}/user_config.yaml
     """
     config_path = _get_user_config_path(session_id)
     

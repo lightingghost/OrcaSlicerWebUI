@@ -1,0 +1,755 @@
+{
+  "tabs": [
+    {
+      "id": "filament",
+      "label": "Filament",
+      "sections": [
+        {
+          "label": "Basic information",
+          "fields": [
+            {
+              "key": "filament_type",
+              "type": "string",
+              "label": "Type",
+              "default": "PLA"
+            },
+            {
+              "key": "filament_vendor",
+              "type": "string",
+              "label": "Vendor",
+              "default": "L(\"(Undefined"
+            },
+            {
+              "key": "filament_soluble",
+              "type": "bool",
+              "label": "Soluble material",
+              "default": "false"
+            },
+            {
+              "key": "filament_is_support",
+              "type": "bool",
+              "label": "Support material",
+              "default": "false"
+            },
+            {
+              "key": "filament_change_length",
+              "type": "float",
+              "label": "Filament ramming length",
+              "unit": "mm",
+              "default": "10"
+            },
+            {
+              "key": "required_nozzle_HRC",
+              "type": "int",
+              "label": "Required nozzle HRC",
+              "default": "0"
+            },
+            {
+              "key": "default_filament_colour",
+              "type": "string",
+              "label": "Default color"
+            },
+            {
+              "key": "filament_diameter",
+              "type": "float",
+              "label": "Diameter",
+              "unit": "mm",
+              "default": "1.75"
+            },
+            {
+              "key": "filament_adhesiveness_category",
+              "type": "int",
+              "label": "Adhesiveness Category",
+              "default": "0"
+            },
+            {
+              "key": "filament_density",
+              "type": "float",
+              "label": "Density",
+              "unit": "g/cm³",
+              "default": "0"
+            },
+            {
+              "key": "filament_shrink",
+              "type": "float",
+              "label": "Shrinkage (XY)",
+              "unit": "%",
+              "default": "100"
+            },
+            {
+              "key": "filament_shrinkage_compensation_z",
+              "type": "float",
+              "label": "Shrinkage (Z)",
+              "unit": "%",
+              "default": "100"
+            },
+            {
+              "key": "filament_cost",
+              "type": "float",
+              "label": "Price",
+              "unit": "money/kg",
+              "default": "0"
+            },
+            {
+              "key": "temperature_vitrification",
+              "type": "int",
+              "label": "Softening temperature",
+              "unit": "℃",
+              "default": "100"
+            },
+            {
+              "key": "idle_temperature",
+              "type": "int",
+              "label": "Idle temperature",
+              "unit": "℃",
+              "default": "0"
+            },
+            {
+              "key": "nozzle_temperature_range_low",
+              "type": "int",
+              "label": "Min",
+              "unit": "℃",
+              "default": "190"
+            },
+            {
+              "key": "nozzle_temperature_range_high",
+              "type": "int",
+              "label": "Max",
+              "unit": "℃",
+              "default": "240"
+            }
+          ]
+        },
+        {
+          "label": "Flow ratio and Pressure Advance",
+          "fields": [
+            {
+              "key": "pellet_flow_coefficient",
+              "type": "float",
+              "label": "Pellet flow coefficient",
+              "default": "0.4157"
+            },
+            {
+              "key": "filament_flow_ratio",
+              "type": "float",
+              "label": "Flow ratio",
+              "default": "1"
+            },
+            {
+              "key": "enable_pressure_advance",
+              "type": "bool",
+              "label": "Enable pressure advance",
+              "default": "false"
+            },
+            {
+              "key": "pressure_advance",
+              "type": "float",
+              "label": "Pressure advance",
+              "default": "0.02"
+            },
+            {
+              "key": "adaptive_pressure_advance",
+              "type": "bool",
+              "label": "Enable adaptive pressure advance (beta)",
+              "default": "false"
+            },
+            {
+              "key": "adaptive_pressure_advance_overhangs",
+              "type": "bool",
+              "label": "Enable adaptive pressure advance within features (beta)",
+              "default": "false"
+            },
+            {
+              "key": "adaptive_pressure_advance_bridges",
+              "type": "float",
+              "label": "Static pressure advance for bridges",
+              "default": "0.0"
+            },
+            {
+              "key": "adaptive_pressure_advance_model",
+              "type": "string",
+              "label": "Adaptive pressure advance measurements (beta)",
+              "default": "0"
+            }
+          ]
+        },
+        {
+          "label": "Print chamber temperature",
+          "fields": [
+            {
+              "key": "activate_chamber_temp_control",
+              "type": "bool",
+              "label": "Activate temperature control",
+              "default": "false"
+            },
+            {
+              "key": "chamber_temperature",
+              "type": "int",
+              "label": "Chamber temperature",
+              "unit": "℃",
+              "default": "0"
+            },
+            {
+              "key": "chamber_minimal_temperature",
+              "type": "int",
+              "label": "Chamber minimal temperature",
+              "unit": "℃",
+              "default": "0"
+            }
+          ]
+        },
+        {
+          "label": "Print temperature",
+          "fields": [
+            {
+              "key": "nozzle_temperature_initial_layer",
+              "type": "int",
+              "label": "First layer nozzle temperature",
+              "unit": "℃",
+              "default": "200"
+            },
+            {
+              "key": "nozzle_temperature",
+              "type": "int",
+              "label": "Nozzle temperature",
+              "unit": "℃",
+              "default": "200"
+            }
+          ]
+        },
+        {
+          "label": "Bed temperature",
+          "fields": [
+            {
+              "key": "supertack_plate_temp_initial_layer",
+              "type": "int",
+              "label": "First layer bed temperature",
+              "unit": "℃",
+              "default": "35"
+            },
+            {
+              "key": "supertack_plate_temp",
+              "type": "int",
+              "label": "Bed temperature",
+              "unit": "℃",
+              "default": "35"
+            },
+            {
+              "key": "cool_plate_temp_initial_layer",
+              "type": "int",
+              "label": "First layer bed temperature",
+              "unit": "℃",
+              "default": "35"
+            },
+            {
+              "key": "cool_plate_temp",
+              "type": "int",
+              "label": "Bed temperature",
+              "unit": "℃",
+              "default": "35"
+            },
+            {
+              "key": "textured_cool_plate_temp_initial_layer",
+              "type": "int",
+              "label": "First layer bed temperature",
+              "unit": "℃",
+              "default": "40"
+            },
+            {
+              "key": "textured_cool_plate_temp",
+              "type": "int",
+              "label": "Bed temperature",
+              "unit": "℃",
+              "default": "40"
+            },
+            {
+              "key": "eng_plate_temp_initial_layer",
+              "type": "int",
+              "label": "First layer bed temperature",
+              "unit": "℃",
+              "default": "45"
+            },
+            {
+              "key": "eng_plate_temp",
+              "type": "int",
+              "label": "Bed temperature",
+              "unit": "℃",
+              "default": "45"
+            },
+            {
+              "key": "hot_plate_temp_initial_layer",
+              "type": "int",
+              "label": "First layer bed temperature",
+              "unit": "℃",
+              "default": "45"
+            },
+            {
+              "key": "hot_plate_temp",
+              "type": "int",
+              "label": "Bed temperature",
+              "unit": "℃",
+              "default": "45"
+            },
+            {
+              "key": "textured_plate_temp_initial_layer",
+              "type": "int",
+              "label": "First layer bed temperature",
+              "unit": "℃",
+              "default": "45"
+            },
+            {
+              "key": "textured_plate_temp",
+              "type": "int",
+              "label": "Bed temperature",
+              "unit": "℃",
+              "default": "45"
+            }
+          ]
+        },
+        {
+          "label": "Volumetric speed limitation",
+          "fields": [
+            {
+              "key": "filament_adaptive_volumetric_speed",
+              "type": "bool",
+              "label": "Adaptive volumetric speed",
+              "default": "false"
+            },
+            {
+              "key": "filament_max_volumetric_speed",
+              "type": "float",
+              "label": "Max volumetric speed",
+              "unit": "mm³/s",
+              "default": "2"
+            }
+          ]
+        }
+      ]
+    },
+    {
+      "id": "cooling",
+      "label": "Cooling",
+      "sections": [
+        {
+          "label": "Cooling for specific layer",
+          "fields": [
+            {
+              "key": "close_fan_the_first_x_layers",
+              "type": "int",
+              "label": "No cooling for the first",
+              "unit": "layers",
+              "default": "1"
+            },
+            {
+              "key": "initial_layer_fan_speed",
+              "type": "int",
+              "label": "First layer fan speed",
+              "unit": "%",
+              "default": "-1"
+            },
+            {
+              "key": "full_fan_speed_layer",
+              "type": "int",
+              "label": "Full fan speed at layer",
+              "unit": "layer",
+              "default": "0"
+            }
+          ]
+        },
+        {
+          "label": "Part cooling fan",
+          "fields": [
+            {
+              "key": "fan_min_speed",
+              "type": "float",
+              "label": "Fan speed",
+              "unit": "%",
+              "default": "20"
+            },
+            {
+              "key": "fan_cooling_layer_time",
+              "type": "float",
+              "label": "Layer time",
+              "unit": "s",
+              "default": "60.0"
+            },
+            {
+              "key": "fan_max_speed",
+              "type": "float",
+              "label": "Fan speed",
+              "unit": "%",
+              "default": "100"
+            },
+            {
+              "key": "slow_down_layer_time",
+              "type": "float",
+              "label": "Layer time",
+              "unit": "s",
+              "default": "5.0"
+            },
+            {
+              "key": "reduce_fan_stop_start_freq",
+              "type": "bool",
+              "label": "Keep fan always on",
+              "default": "false"
+            },
+            {
+              "key": "slow_down_for_layer_cooling",
+              "type": "bool",
+              "label": "Slow printing down for better layer cooling",
+              "default": "true"
+            },
+            {
+              "key": "dont_slow_down_outer_wall",
+              "type": "bool",
+              "label": "Don't slow down outer walls",
+              "default": "false"
+            },
+            {
+              "key": "slow_down_min_speed",
+              "type": "float",
+              "label": "Min print speed",
+              "unit": "mm/s",
+              "default": "10"
+            },
+            {
+              "key": "enable_overhang_bridge_fan",
+              "type": "bool",
+              "label": "Force cooling for overhangs and bridges",
+              "default": "true"
+            },
+            {
+              "key": "overhang_fan_threshold",
+              "type": "enum",
+              "label": "Overhang cooling activation threshold",
+              "options": [
+                {
+                  "value": "0%",
+                  "label": "0%"
+                },
+                {
+                  "value": "10%",
+                  "label": "10%"
+                },
+                {
+                  "value": "25%",
+                  "label": "25%"
+                },
+                {
+                  "value": "50%",
+                  "label": "50%"
+                },
+                {
+                  "value": "75%",
+                  "label": "75%"
+                },
+                {
+                  "value": "95%",
+                  "label": "95%"
+                }
+              ],
+              "default": "(int"
+            },
+            {
+              "key": "overhang_fan_speed",
+              "type": "int",
+              "label": "Overhangs and external bridges fan speed",
+              "unit": "%",
+              "default": "100"
+            },
+            {
+              "key": "internal_bridge_fan_speed",
+              "type": "int",
+              "label": "Internal bridges fan speed",
+              "unit": "%",
+              "default": "-1"
+            },
+            {
+              "key": "support_material_interface_fan_speed",
+              "type": "int",
+              "label": "Support interface fan speed",
+              "unit": "%",
+              "default": "-1"
+            },
+            {
+              "key": "ironing_fan_speed",
+              "type": "int",
+              "label": "Ironing fan speed",
+              "unit": "%",
+              "default": "-1"
+            }
+          ]
+        },
+        {
+          "label": "Auxiliary part cooling fan",
+          "fields": [
+            {
+              "key": "additional_cooling_fan_speed",
+              "type": "int",
+              "label": "Fan speed",
+              "unit": "%",
+              "default": "0"
+            }
+          ]
+        },
+        {
+          "label": "Exhaust fan",
+          "fields": [
+            {
+              "key": "activate_air_filtration",
+              "type": "bool",
+              "label": "Activate air filtration",
+              "default": "false"
+            },
+            {
+              "key": "activate_air_filtration_during_print",
+              "type": "bool",
+              "label": "During print",
+              "default": "true"
+            },
+            {
+              "key": "during_print_exhaust_fan_speed",
+              "type": "int",
+              "label": "Fan speed",
+              "unit": "%",
+              "default": "60"
+            },
+            {
+              "key": "activate_air_filtration_on_completion",
+              "type": "bool",
+              "label": "On completion",
+              "default": "true"
+            },
+            {
+              "key": "complete_print_exhaust_fan_speed",
+              "type": "int",
+              "label": "Fan speed",
+              "unit": "%",
+              "default": "80"
+            }
+          ]
+        }
+      ]
+    },
+    {
+      "id": "advanced",
+      "label": "Advanced",
+      "sections": [
+        {
+          "label": "Filament start G-code",
+          "fields": [
+            {
+              "key": "filament_start_gcode",
+              "type": "gcode",
+              "label": "Start G-code"
+            }
+          ]
+        },
+        {
+          "label": "Change extrusion role G-code",
+          "fields": [
+            {
+              "key": "filament_change_extrusion_role_gcode",
+              "type": "gcode",
+              "label": "Change extrusion role G-code (filament)"
+            }
+          ]
+        },
+        {
+          "label": "Filament end G-code",
+          "fields": [
+            {
+              "key": "filament_end_gcode",
+              "type": "gcode",
+              "label": "End G-code"
+            }
+          ]
+        }
+      ]
+    },
+    {
+      "id": "multimaterial",
+      "label": "Multimaterial",
+      "sections": [
+        {
+          "label": "Wipe tower parameters",
+          "fields": [
+            {
+              "key": "filament_minimal_purge_on_wipe_tower",
+              "type": "float",
+              "label": "Minimal purge on wipe tower",
+              "unit": "mm³",
+              "default": "15"
+            },
+            {
+              "key": "filament_tower_interface_pre_extrusion_dist",
+              "type": "float",
+              "label": "Interface layer pre-extrusion distance",
+              "unit": "mm",
+              "default": "10"
+            },
+            {
+              "key": "filament_tower_interface_pre_extrusion_length",
+              "type": "float",
+              "label": "Interface layer pre-extrusion length",
+              "unit": "mm",
+              "default": "0"
+            },
+            {
+              "key": "filament_tower_ironing_area",
+              "type": "float",
+              "label": "Tower ironing area",
+              "unit": "mm²",
+              "default": "4"
+            },
+            {
+              "key": "filament_tower_interface_purge_volume",
+              "type": "float",
+              "label": "Interface layer purge length",
+              "unit": "mm",
+              "default": "20"
+            },
+            {
+              "key": "filament_tower_interface_print_temp",
+              "type": "int",
+              "label": "Interface layer print temperature",
+              "unit": "℃",
+              "default": "-1"
+            }
+          ]
+        },
+        {
+          "label": "Multi Filament",
+          "fields": [
+            {
+              "key": "long_retractions_when_ec",
+              "type": "bool",
+              "label": "Long retraction when extruder change",
+              "default": "false"
+            },
+            {
+              "key": "retraction_distances_when_ec",
+              "type": "float",
+              "label": "Retraction distance when extruder change",
+              "unit": "mm",
+              "default": "10"
+            }
+          ]
+        },
+        {
+          "label": "Tool change parameters with single extruder MM printers",
+          "fields": [
+            {
+              "key": "filament_loading_speed_start",
+              "type": "float",
+              "label": "Loading speed at the start",
+              "unit": "mm/s",
+              "default": "3"
+            },
+            {
+              "key": "filament_loading_speed",
+              "type": "float",
+              "label": "Loading speed",
+              "unit": "mm/s",
+              "default": "28"
+            },
+            {
+              "key": "filament_unloading_speed_start",
+              "type": "float",
+              "label": "Unloading speed at the start",
+              "unit": "mm/s",
+              "default": "100"
+            },
+            {
+              "key": "filament_unloading_speed",
+              "type": "float",
+              "label": "Unloading speed",
+              "unit": "mm/s",
+              "default": "90"
+            },
+            {
+              "key": "filament_toolchange_delay",
+              "type": "float",
+              "label": "Delay after unloading",
+              "unit": "s",
+              "default": "0"
+            },
+            {
+              "key": "filament_cooling_moves",
+              "type": "int",
+              "label": "Number of cooling moves",
+              "default": "4"
+            },
+            {
+              "key": "filament_cooling_initial_speed",
+              "type": "float",
+              "label": "Speed of the first cooling move",
+              "unit": "mm/s",
+              "default": "2.2"
+            },
+            {
+              "key": "filament_cooling_final_speed",
+              "type": "float",
+              "label": "Speed of the last cooling move",
+              "unit": "mm/s",
+              "default": "3.4"
+            },
+            {
+              "key": "filament_stamping_loading_speed",
+              "type": "float",
+              "label": "Stamping loading speed",
+              "default": "0"
+            },
+            {
+              "key": "filament_stamping_distance",
+              "type": "float",
+              "label": "Stamping distance measured from the center of the cooling tube",
+              "default": "0"
+            }
+          ]
+        },
+        {
+          "label": "Tool change parameters with multi extruder MM printers",
+          "fields": [
+            {
+              "key": "filament_multitool_ramming",
+              "type": "bool",
+              "label": "Enable ramming for multi-tool setups",
+              "default": "false"
+            },
+            {
+              "key": "filament_multitool_ramming_volume",
+              "type": "float",
+              "label": "Multi-tool ramming volume",
+              "unit": "mm³",
+              "default": "10"
+            },
+            {
+              "key": "filament_multitool_ramming_flow",
+              "type": "float",
+              "label": "Multi-tool ramming flow",
+              "unit": "mm³/s",
+              "default": "10"
+            }
+          ]
+        }
+      ]
+    },
+    {
+      "id": "notes",
+      "label": "Notes",
+      "sections": [
+        {
+          "label": "Notes",
+          "fields": [
+            {
+              "key": "filament_notes",
+              "type": "gcode",
+              "label": "Filament notes"
+            }
+          ]
+        }
+      ]
+    }
+  ]
+}

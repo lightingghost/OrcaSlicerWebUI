@@ -6,14 +6,19 @@ set -e
 # Configuration
 export ORCA_CLI_PATH=/home/odin/local/orcaslicerWebUI/squashfs-root/usr/bin/orca-slicer
 export WORKSPACE_ROOT=/tmp/orca-workspace
+export USER_WORKSPACE=/tmp/orca-workspace/user_configs
 export MAX_CONCURRENT_JOBS=4
 export JOB_TIMEOUT_SECONDS=3600
 export OUTPUT_RETENTION_SECONDS=86400
 export JOB_RECORD_RETENTION_SECONDS=604800
 export API_SECRET=test-secret-key
 
-# Create workspace
-mkdir -p $WORKSPACE_ROOT
+# Create workspace directories
+mkdir -p $USER_WORKSPACE
+mkdir -p $USER_WORKSPACE/autosave
+mkdir -p $USER_WORKSPACE/printer/autosave
+mkdir -p $USER_WORKSPACE/filament/autosave
+mkdir -p $USER_WORKSPACE/process/autosave
 
 # Colors for output
 GREEN='\033[0;32m'

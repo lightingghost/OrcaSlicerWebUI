@@ -15,6 +15,7 @@
 import { useState, useMemo, useEffect } from 'react';
 import { useStore } from '../../store';
 import { apiClient } from '../../api/client';
+import { FilamentConfigDialog } from './FilamentConfigDialog';
 
 /**
  * Extract material type from filament profile name (client-side fallback)
@@ -49,7 +50,7 @@ interface FilamentPickerModalProps {
   filamentProfiles: Array<{ name: string; path: string; category: string }>;
   selectedPaths: string[];
   onToggle: (profile: any) => void;
-  selectedPrinterName: string | null; // Name of currently selected printer for compatibility filtering
+  selectedPrinterName: string | null;
 }
 
 interface FilamentProfileInfo {
@@ -78,55 +79,46 @@ const FilamentPickerModal: React.FC<FilamentPickerModalProps> = ({
   const [filterCompatibility, setFilterCompatibility] = useState<'all' | 'compatible'>('all');
   const [metadata, setMetadata] = useState<FilamentMetadata | null>(null);
   const [isLoadingMetadata, setIsLoadingMetadata] = useState(false);
+  const [userFilaments, setUserFilaments] = useState<Array<{ name: string; path: string }>>([]);
 
-  // Fetch filament metadata when modal opens (includes all filaments with compatibility data)
+  // Fetch system filament metadata + user-saved filaments when modal opens
   useEffect(() => {
-    if (isOpen && !metadata) {
+    if (!isOpen) return;
+
+    // Fetch system filament metadata (only once)
+    if (!metadata) {
       setIsLoadingMetadata(true);
-      
       apiClient.getFilamentMetadata()
-        .then((data) => {
-          console.log('Fetched filament metadata:', data);
-          setMetadata(data);
-        })
+        .then((data) => { setMetadata(data); })
         .catch(err => {
           console.error('Failed to fetch filament metadata:', err);
-          // Fallback: construct from props
           const manufacturers = new Set<string>();
           const materialTypes = new Set<string>();
           const fallbackFilaments: FilamentProfileInfo[] = [];
-          
           filamentProfiles.forEach(profile => {
-            const manufacturerMatch = profile.path.match(/^([^/]+)\//);
-            if (manufacturerMatch) {
-              manufacturers.add(manufacturerMatch[1]);
-            }
-            const materialType = extractMaterialType(profile.name);
-            materialTypes.add(materialType);
-            
-            fallbackFilaments.push({
-              name: profile.name,
-              path: profile.path,
-              material_type: materialType,
-              compatible_printers: []
-            });
+            const mfr = profile.path.match(/^([^/]+)\//)?.[1];
+            if (mfr) manufacturers.add(mfr);
+            const mat = extractMaterialType(profile.name);
+            materialTypes.add(mat);
+            fallbackFilaments.push({ name: profile.name, path: profile.path, material_type: mat, compatible_printers: [] });
           });
-          
-          // Create fallback metadata without compatibility info
-          const fallbackMetadata: FilamentMetadata = {
-            manufacturers: Array.from(manufacturers).sort(),
-            material_types: Array.from(materialTypes).sort(),
-            filaments: fallbackFilaments
-          };
-          
-          console.log('Using fallback metadata:', fallbackMetadata);
-          setMetadata(fallbackMetadata);
+          setMetadata({ manufacturers: Array.from(manufacturers).sort(), material_types: Array.from(materialTypes).sort(), filaments: fallbackFilaments });
         })
-        .finally(() => {
-          setIsLoadingMetadata(false);
-        });
+        .finally(() => setIsLoadingMetadata(false));
     }
-  }, [isOpen, metadata, filamentProfiles]);
+
+    // Fetch user-saved filament configs every time the modal opens
+    apiClient.listFilamentConfigs()
+      .then(configs => {
+        // Use all non-autosave configs as user filaments
+        const saved = configs.filter(c => !c.autosave).map(c => ({
+          name: c.name,
+          path: `user:${c.path}`,
+        }));
+        setUserFilaments(saved);
+      })
+      .catch(err => console.error('Failed to fetch user filaments:', err));
+  }, [isOpen]);
 
   // Filter profiles based on selections
   const filteredProfiles = useMemo(() => {
@@ -301,6 +293,36 @@ const FilamentPickerModal: React.FC<FilamentPickerModalProps> = ({
           )}
         </div>
 
+        {/* User-saved filaments */}
+        {userFilaments.length > 0 && (
+          <div className="mb-4">
+            <div className="flex items-center gap-2 mb-2">
+              <span className="text-xs font-semibold text-gray-400 uppercase tracking-wide">
+                My saved filaments
+              </span>
+              <div className="flex-1 h-px bg-gray-700" />
+            </div>
+            <div className="space-y-2">
+              {userFilaments.map(uf => {
+                const isSelected = selectedPaths.includes(uf.path);
+                return (
+                  <button key={uf.path} onClick={() => onToggle({ ...uf, category: 'filament', isUserConfig: true })}
+                    className={`w-full p-3 rounded text-left transition-colors ${
+                      isSelected ? 'bg-purple-600 text-white' : 'bg-gray-700/80 text-gray-200 hover:bg-gray-600 border border-dashed border-gray-600'
+                    }`}>
+                    <div className="flex items-center justify-between">
+                      <span className="text-sm font-medium truncate">{uf.name}</span>
+                      <span className="text-xs bg-teal-700 text-teal-100 px-2 py-0.5 rounded ml-2 flex-shrink-0">
+                        user
+                      </span>
+                    </div>
+                  </button>
+                );
+              })}
+            </div>
+          </div>
+        )}
+
         <button
           onClick={onClose}
           className="mt-6 w-full px-4 py-2 bg-gray-700 text-white rounded hover:bg-gray-600 transition-colors"
@@ -316,12 +338,11 @@ interface FilamentSwatchProps {
   profile: { name: string; path: string };
   color?: string;
   onRemove: () => void;
+  onEdit: () => void;
 }
 
-const FilamentSwatch: React.FC<FilamentSwatchProps> = ({ profile, color, onRemove }) => {
-  // Parse color if present (format: "#RRGGBB" or empty string)
-  // Default to a generic color if not specified
-  const displayColor = color && color.startsWith('#') ? color : '#8B8B8B'; // gray default
+const FilamentSwatch: React.FC<FilamentSwatchProps> = ({ profile, color, onRemove, onEdit }) => {
+  const displayColor = color && color.startsWith('#') ? color : '#8B8B8B';
 
   return (
     <div
@@ -339,6 +360,16 @@ const FilamentSwatch: React.FC<FilamentSwatchProps> = ({ profile, color, onRemov
       <span className="text-sm text-gray-200 truncate flex-1">
         {profile.name}
       </span>
+
+      {/* Edit button */}
+      <button
+        onClick={onEdit}
+        className="w-5 h-5 flex items-center justify-center rounded bg-gray-600 hover:bg-teal-600 text-white text-xs transition-colors flex-shrink-0"
+        title="Edit filament settings"
+        aria-label={`Edit ${profile.name}`}
+      >
+        ✎
+      </button>
       
       {/* Remove button (minus icon) */}
       <button
@@ -359,11 +390,13 @@ export const FilamentRow: React.FC = () => {
     selectedFilamentProfiles,
     selectedManufacturer,
     selectedPrinterProfile,
+    printerSystemName,
     toggleFilamentProfile,
     saveUserConfig,
   } = useStore();
 
   const [isModalOpen, setIsModalOpen] = useState(false);
+  const [editingFilament, setEditingFilament] = useState<{ profile: { name: string; path: string }; index: number } | null>(null);
 
   // Auto-save when filament profiles change
   useEffect(() => {
@@ -418,13 +451,12 @@ export const FilamentRow: React.FC = () => {
             No filaments selected
           </div>
         ) : (
-          selectedFilamentProfiles.map((profile) => (
+          selectedFilamentProfiles.map((profile, idx) => (
             <FilamentSwatch
               key={profile.path}
               profile={profile}
               onRemove={() => handleRemoveFilament(profile)}
-              // Note: color would be fetched from profile JSON in a full implementation
-              // For now, we use a default color
+              onEdit={() => setEditingFilament({ profile, index: idx })}
             />
           ))
         )}
@@ -437,7 +469,16 @@ export const FilamentRow: React.FC = () => {
         filamentProfiles={filamentProfiles}
         selectedPaths={selectedFilamentProfiles.map((p) => p.path)}
         onToggle={toggleFilamentProfile}
-        selectedPrinterName={selectedPrinterProfile?.name || null}
+        selectedPrinterName={printerSystemName ?? selectedPrinterProfile?.name ?? null}
+      />
+
+      {/* Filament Config Edit Dialog */}
+      <FilamentConfigDialog
+        isOpen={editingFilament !== null}
+        onClose={() => setEditingFilament(null)}
+        profilePath={editingFilament?.profile.path ?? null}
+        filamentName={editingFilament?.profile.name ?? ''}
+        filamentIndex={editingFilament?.index ?? 0}
       />
     </div>
   );

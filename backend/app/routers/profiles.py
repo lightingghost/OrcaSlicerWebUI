@@ -200,6 +200,89 @@ async def get_all_profiles(manufacturer: str | None = None) -> List[ProfileEntry
     return all_profiles
 
 
+@router.get("/profiles/process", response_model=List[ProfileEntry])
+async def get_process_profiles(compatible_printer: str | None = None) -> List[ProfileEntry]:
+    """
+    Get all process profiles, optionally filtered to those compatible with a printer.
+
+    Scans every manufacturer's process/ directory.  When ``compatible_printer``
+    is provided, reads each profile's JSON and only returns entries whose
+    ``compatible_printers`` list contains the given printer name.  Profiles
+    with no ``compatible_printers`` field are always included (backward compat).
+
+    This is an O(files) scan but runs on the server so the client makes exactly
+    one request instead of one request per profile.
+
+    Args:
+        compatible_printer: Canonical printer name as stored in compatible_printers
+                            (e.g. "Flashforge Adventurer 5M 0.4 Nozzle")
+
+    Returns:
+        List[ProfileEntry]: Sorted list of matching process profile entries
+    """
+    profiles_root = _get_profiles_root()
+    results: List[ProfileEntry] = []
+
+    try:
+        for mfr_entry in sorted(os.listdir(profiles_root)):
+            mfr_path = profiles_root / mfr_entry
+            if not mfr_path.is_dir():
+                continue
+            process_dir = mfr_path / "process"
+            if not process_dir.exists() or not process_dir.is_dir():
+                continue
+
+            for root, _dirs, files in os.walk(process_dir):
+                for filename in sorted(files):
+                    if not filename.endswith(".json"):
+                        continue
+                    file_path = Path(root) / filename
+                    try:
+                        rel_path = file_path.relative_to(profiles_root)
+                    except ValueError:
+                        continue
+
+                    name = filename[:-5]
+
+                    if compatible_printer:
+                        # Read the file to check compatible_printers
+                        try:
+                            with open(file_path, "r", encoding="utf-8") as f:
+                                data = json.load(f)
+                        except Exception:
+                            # Skip unreadable files but don't abort the scan
+                            continue
+                        # Only return instantiated profiles whose compatible_printers
+                        # explicitly includes the requested printer.
+                        # Profiles with absent/empty compatible_printers are base
+                        # (non-instantiated) profiles and should not be shown.
+                        instantiation = data.get("instantiation", "false")
+                        if instantiation != "true":
+                            continue
+                        compatible = data.get("compatible_printers")
+                        if not compatible or not isinstance(compatible, list):
+                            continue
+                        if compatible_printer not in compatible:
+                            continue
+                    else:
+                        # No filter: only return instantiated profiles
+                        try:
+                            with open(file_path, "r", encoding="utf-8") as f:
+                                data = json.load(f)
+                        except Exception:
+                            continue
+                        if data.get("instantiation", "false") != "true":
+                            continue
+                    results.append(ProfileEntry(name=name, path=str(rel_path), category="process"))
+    except PermissionError as e:
+        raise HTTPException(status_code=500, detail=f"Permission denied: {e}")
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=f"Error scanning process profiles: {e}")
+
+    results.sort(key=lambda p: p.name)
+    return results
+
+
 @router.get("/profiles/manufacturers", response_model=List[str])
 async def get_manufacturers() -> List[str]:
     """

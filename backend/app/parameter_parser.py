@@ -136,6 +136,9 @@ class ParameterParser:
 
                 self.parameters[param_key] = param_info
 
+        # Copy enum values for parameters that reference another parameter's list
+        self._copy_enum_values_from_reference(self.parameters)
+
         return self.parameters
 
     # ------------------------------------------------------------------
@@ -390,14 +393,47 @@ class ParameterParser:
     def _extract_enum_values(self, block: str) -> Optional[List[str]]:
         """Extract enum values from the definition block"""
 
-        # Look for enum_values.push_back("value")
+        # Pattern 1: push_back / emplace_back with individual string literals
         enum_values = []
-        pattern = r'def->enum_values\.push_back\s*\(\s*"([^"]+)"\s*\)'
-
-        for match in re.finditer(pattern, block):
+        pattern_individual = r'def->enum_values\.(?:push_back|emplace_back)\s*\(\s*"([^"]+)"\s*\)'
+        for match in re.finditer(pattern_individual, block):
             enum_values.append(match.group(1))
+        if enum_values:
+            return enum_values
 
-        return enum_values if enum_values else None
+        # Pattern 2: brace-initializer list  = {"val1", "val2", ...}
+        # e.g. def->enum_values  = {"Default", "MZV", "ZV", ...};
+        brace_match = re.search(r'def->enum_values\s*=\s*\{([^}]+)\}', block)
+        if brace_match:
+            inner = brace_match.group(1)
+            enum_values = [m.group(1) for m in re.finditer(r'"([^"]+)"', inner)]
+            if enum_values:
+                return enum_values
+
+        return None
+
+    def _copy_enum_values_from_reference(self, parameters: Dict[str, Dict[str, Any]]) -> None:
+        """
+        Some parameters copy their enum_values from another parameter using
+        assignment:  def->enum_values = other_def->enum_values;
+        We handle the known cases by copying from the reference parameter
+        after all parameters have been parsed.
+        """
+        # Known pattern in PrintConfig.cpp:
+        #   bottom_surface_pattern and internal_solid_infill_pattern copy
+        #   from top_surface_pattern (stored as def_top_fill_pattern).
+        COPY_FROM = {
+            'bottom_surface_pattern':       'top_surface_pattern',
+            'internal_solid_infill_pattern': 'top_surface_pattern',
+        }
+        for dest_key, src_key in COPY_FROM.items():
+            if dest_key in parameters and src_key in parameters:
+                if not parameters[dest_key].get('enum_values'):
+                    parameters[dest_key]['enum_values'] = parameters[src_key].get('enum_values')
+                    if not parameters[dest_key].get('default_value'):
+                        evs = parameters[dest_key]['enum_values']
+                        if evs:
+                            parameters[dest_key]['default_value'] = evs[0]
 
     def save_to_json(self, output_path: str) -> None:
         """Save the extracted parameters to a JSON file, ordered to match

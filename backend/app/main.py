@@ -96,6 +96,15 @@ async def lifespan(app: FastAPI) -> AsyncIterator[None]:
     except Exception as e:
         print(f"✗ Authentication initialization failed: {e}")
         raise
+
+    # Startup: Initialise user workspace directory tree
+    try:
+        from app.config import settings as _s
+        _s.init_user_workspace()
+        print(f"✓ User workspace initialised at {_s.user_workspace_root}")
+    except Exception as e:
+        print(f"✗ User workspace initialisation failed: {e}")
+        raise
     
     # Startup: Initialize database
     try:

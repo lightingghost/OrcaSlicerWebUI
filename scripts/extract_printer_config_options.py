@@ -103,12 +103,29 @@ def strip_L(s: str) -> str:
     # Unwrap L("...") or u8"..." or plain "..."
     m = _L_PATTERN.match(s)
     if m:
-        return m.group(1)
+        return _decode_cpp_string(m.group(1))
     # u8"..." (raw degree symbol etc.)
     m = re.match(r'u8"([^"]*)"', s)
     if m:
-        return m.group(1)
+        return _decode_cpp_string(m.group(1))
+    # L(u8"...") with possible trailing whitespace
+    m = re.match(r'L\(\s*u8"([^"]*)"\s*\)', s)
+    if m:
+        return _decode_cpp_string(m.group(1))
     return s.strip('"').strip("'")
+
+
+def _decode_cpp_string(s: str) -> str:
+    """Decode C++ unicode escapes like \\u2103 → °C, but only if escapes are present."""
+    if '\\u' not in s and '\\U' not in s:
+        return s  # already proper UTF-8, don't re-encode
+    try:
+        return s.encode('utf-8').decode('unicode_escape').encode('latin-1').decode('utf-8')
+    except Exception:
+        try:
+            return bytes(s, 'utf-8').decode('unicode_escape')
+        except Exception:
+            return s
 
 
 def parse_print_config(path: Path) -> dict:
@@ -118,6 +135,9 @@ def parse_print_config(path: Path) -> dict:
         enum_values: list[str], enum_labels: list[str], default: str
     """
     text = path.read_text(encoding="utf-8", errors="replace")
+    # Strip block comments before line-by-line parsing so embedded patterns
+    # like L(u8"\u2103" /* °C */) are cleaned up first
+    text = re.sub(r'/\*.*?\*/', '', text, flags=re.DOTALL)
     lines = text.splitlines()
 
     options: dict = {}
@@ -178,11 +198,11 @@ def parse_print_config(path: Path) -> dict:
             # Strip trailing C++ line comment FIRST, then semicolons/whitespace
             raw = re.sub(r'\s*//.*$', '', raw).strip().rstrip(';').strip()
             # Handle L(u8"...") or u8"..." or L("...") or plain "..."
-            m2 = re.match(r'L\(u8"([^"]+)"\)', raw)
+            m2 = re.match(r'L\(\s*u8"([^"]+)"\s*\)', raw)
             if m2:
-                opt["unit"] = m2.group(1)
+                opt["unit"] = _decode_cpp_string(m2.group(1))
             elif raw.startswith('u8"') or raw.startswith("u8'"):
-                opt["unit"] = raw[3:].strip('"\'')
+                opt["unit"] = _decode_cpp_string(raw[3:].strip('"\''))
             elif raw.startswith('"'):
                 opt["unit"] = raw.strip('"')
             else:

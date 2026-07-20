@@ -442,7 +442,7 @@ class ApiClient {
   }
 
   // ============================================================================
-  // Printer Config Endpoints
+  // Printer Config Endpoints  →  USER_WORKSPACE/printer/
   // ============================================================================
 
   async listPrinterConfigs(): Promise<PrinterConfigEntry[]> {
@@ -471,6 +471,76 @@ class ApiClient {
       `/api/printer-configs/${encodeURIComponent(name)}?${params}`,
       { method: "DELETE" }
     );
+  }
+
+  // ============================================================================
+  // Filament Config Endpoints  →  USER_WORKSPACE/filament/
+  // ============================================================================
+
+  async listFilamentConfigs(): Promise<PrinterConfigEntry[]> {
+    return this.request<PrinterConfigEntry[]>("/api/filament-configs");
+  }
+
+  async getFilamentConfig(name: string, autosave = false): Promise<Record<string, unknown>> {
+    const params = new URLSearchParams({ autosave: String(autosave) });
+    return this.request<Record<string, unknown>>(`/api/filament-configs/${encodeURIComponent(name)}?${params}`);
+  }
+
+  async saveFilamentConfig(
+    name: string,
+    config: Record<string, unknown>,
+    autosave = false
+  ): Promise<PrinterConfigEntry> {
+    return this.request<PrinterConfigEntry>("/api/filament-configs", {
+      method: "POST",
+      body: JSON.stringify({ name, config, autosave }),
+    });
+  }
+
+  // ============================================================================
+  // Process Config Endpoints  →  USER_WORKSPACE/process/
+  // ============================================================================
+
+  async listProcessConfigs(): Promise<PrinterConfigEntry[]> {
+    return this.request<PrinterConfigEntry[]>("/api/process-configs");
+  }
+
+  async getProcessConfig(name: string, autosave = false): Promise<Record<string, unknown>> {
+    const params = new URLSearchParams({ autosave: String(autosave) });
+    return this.request<Record<string, unknown>>(`/api/process-configs/${encodeURIComponent(name)}?${params}`);
+  }
+
+  async saveProcessConfig(
+    name: string,
+    config: Record<string, unknown>,
+    autosave = false
+  ): Promise<PrinterConfigEntry> {
+    return this.request<PrinterConfigEntry>("/api/process-configs", {
+      method: "POST",
+      body: JSON.stringify({ name, config, autosave }),
+    });
+  }
+
+  // ============================================================================
+  // Autosave Endpoints  →  USER_WORKSPACE/autosave/  (flat, shared by all types)
+  // Fixed names: printer_config, process_config, filament_1, filament_2, ...
+  // ============================================================================
+
+  async getAutosave(name: string): Promise<Record<string, unknown>> {
+    return this.request<Record<string, unknown>>(`/api/autosave/${encodeURIComponent(name)}`);
+  }
+
+  async saveAutosave(name: string, config: Record<string, unknown>): Promise<{ name: string }> {
+    return this.request<{ name: string }>(`/api/autosave/${encodeURIComponent(name)}`, {
+      method: "POST",
+      body: JSON.stringify({ config }),
+    });
+  }
+
+  async deleteAutosave(name: string): Promise<{ message: string }> {
+    return this.request<{ message: string }>(`/api/autosave/${encodeURIComponent(name)}`, {
+      method: "DELETE",
+    });
   }
 
   // ============================================================================

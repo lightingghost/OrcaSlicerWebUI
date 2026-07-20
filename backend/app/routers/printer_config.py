@@ -1,19 +1,26 @@
 """
-Printer configuration management API routes.
+User configuration CRUD for printer, filament, and process configs.
 
-Handles saving, loading, and listing user-customized printer configurations.
-Configs are saved in two locations:
-  - Autosave: workspace/user_configs/autosave/<name>.json  (written on every edit)
-  - Saved:    workspace/user_configs/<name>.json           (written on explicit save)
+Directory layout (rooted at USER_WORKSPACE or WORKSPACE_ROOT/user_configs):
+  autosave/           ← ALL autosaves, flat, shared across types
+                        e.g. printer_config.json, process_config.json,
+                             filament_1.json, filament_2.json, ...
+  printer/            ← explicit user saves (printer)
+  filament/           ← explicit user saves (filament)
+  process/            ← explicit user saves (process)
 
-The "user_configs/autosave" path is intentionally nested *inside* user_configs so
-that the saved-config listing can skip it by name.
+Routes
+------
+  /api/printer-configs
+  /api/filament-configs
+  /api/process-configs
+  /api/autosave/{name}   ← flat autosave CRUD, shared by all config types
 """
 
 import json
 import re
 from pathlib import Path
-from typing import Any
+from typing import Any, Literal
 
 from fastapi import APIRouter, Depends, HTTPException
 from pydantic import BaseModel
@@ -23,196 +30,236 @@ from app.config import settings
 
 router = APIRouter(dependencies=[Depends(verify_token)])
 
+ConfigCategory = Literal["printer", "filament", "process"]
+
+_CATEGORY_DIR: dict[str, Any] = {
+    "printer":  lambda: settings.printer_configs_dir,
+    "filament": lambda: settings.filament_configs_dir,
+    "process":  lambda: settings.process_configs_dir,
+}
+
 
 # ---------------------------------------------------------------------------
 # Helpers
 # ---------------------------------------------------------------------------
 
-def _user_configs_dir() -> Path:
-    """Root of the user printer-config directory tree."""
-    return settings.workspace_root / "user_configs"
-
-
-def _autosave_dir() -> Path:
-    return _user_configs_dir() / "autosave"
-
-
 def _safe_filename(name: str) -> str:
-    """Convert an arbitrary string to a safe filename (no slashes / special chars)."""
     name = name.strip()
-    # Replace path separators and other problematic characters
     name = re.sub(r'[/\\:*?"<>|]', "_", name)
-    # Collapse whitespace
     name = re.sub(r'\s+', " ", name)
     if not name:
         raise ValueError("Config name must not be empty")
     return name
 
 
-def _config_path(name: str, autosave: bool = False) -> Path:
-    """Return the JSON file path for a given config name."""
-    safe = _safe_filename(name)
-    base = _autosave_dir() if autosave else _user_configs_dir()
-    return base / f"{safe}.json"
+def _category_path(category: ConfigCategory, name: str) -> Path:
+    return _CATEGORY_DIR[category]() / f"{_safe_filename(name)}.json"
+
+
+def _autosave_path(name: str) -> Path:
+    return settings.autosave_dir / f"{_safe_filename(name)}.json"
 
 
 # ---------------------------------------------------------------------------
 # Models
 # ---------------------------------------------------------------------------
 
-class PrinterConfigSaveRequest(BaseModel):
-    """
-    Request body for saving a printer configuration.
-
-    Attributes:
-        name:    Human-readable display name for the config (used as filename).
-        config:  Arbitrary key/value pairs from the printer profile editor.
-        autosave: When True the config is written to the autosave directory
-                  instead of the main user_configs directory.
-    """
+class ConfigSaveRequest(BaseModel):
     name: str
     config: dict[str, Any]
-    autosave: bool = False
+    autosave: bool = False  # kept for backward-compat but ignored for the flat endpoints
 
 
-class PrinterConfigEntry(BaseModel):
-    """
-    Summary entry returned when listing saved printer configs.
+class AutosaveSaveRequest(BaseModel):
+    config: dict[str, Any]
 
-    Attributes:
-        name:  Display name of the config.
-        path:  Relative path token (same as the name, used as the key for
-               GET/DELETE operations).
-        autosave: Whether this entry lives in the autosave directory.
-    """
+
+class ConfigEntry(BaseModel):
     name: str
     path: str
     autosave: bool = False
 
+# Backward-compat alias
+PrinterConfigEntry = ConfigEntry
+
 
 # ---------------------------------------------------------------------------
-# Endpoints
+# Generic CRUD helpers (for category-specific explicit saves)
 # ---------------------------------------------------------------------------
 
-@router.get("/printer-configs", response_model=list[PrinterConfigEntry])
-async def list_printer_configs() -> list[PrinterConfigEntry]:
-    """
-    List all saved user printer configurations.
-
-    Returns configs from workspace/user_configs/*.json  (explicitly saved)
-    and workspace/user_configs/autosave/*.json (autosaved).
-
-    Returns:
-        List[PrinterConfigEntry]: Sorted list of saved printer configs.
-    """
-    results: list[PrinterConfigEntry] = []
-
-    user_dir = _user_configs_dir()
-    autosave_dir = _autosave_dir()
-
-    # Explicitly saved configs (top-level *.json, skip the autosave sub-dir)
-    if user_dir.exists():
-        for p in sorted(user_dir.glob("*.json")):
-            results.append(PrinterConfigEntry(name=p.stem, path=p.stem, autosave=False))
-
-    # Autosaved configs
-    if autosave_dir.exists():
-        for p in sorted(autosave_dir.glob("*.json")):
-            results.append(PrinterConfigEntry(name=p.stem, path=p.stem, autosave=True))
-
-    return results
+def _list_configs(category: ConfigCategory) -> list[ConfigEntry]:
+    d = _CATEGORY_DIR[category]()
+    if not d.exists():
+        return []
+    return [
+        ConfigEntry(name=p.stem, path=p.stem, autosave=False)
+        for p in sorted(d.glob("*.json"))
+    ]
 
 
-@router.get("/printer-configs/{name}", response_model=dict)
-async def get_printer_config(name: str, autosave: bool = False) -> dict:
-    """
-    Load a single saved printer configuration by name.
-
-    Args:
-        name:     Config name (the stem of the .json file).
-        autosave: When True, look in the autosave directory instead.
-
-    Returns:
-        dict: The raw config JSON.
-
-    Raises:
-        HTTPException 404: If the config does not exist.
-        HTTPException 500: If the file cannot be read or parsed.
-    """
-    path = _config_path(name, autosave=autosave)
-
+def _get_config(category: ConfigCategory, name: str) -> dict:
+    path = _category_path(category, name)
     if not path.exists():
-        raise HTTPException(status_code=404, detail=f"Printer config '{name}' not found")
-
+        raise HTTPException(status_code=404, detail=f"Config '{name}' not found")
     try:
         with open(path, "r", encoding="utf-8") as f:
             return json.load(f)
     except json.JSONDecodeError as e:
-        raise HTTPException(status_code=500, detail=f"Invalid JSON in config file: {e}")
+        raise HTTPException(status_code=500, detail=f"Invalid JSON: {e}")
     except OSError as e:
-        raise HTTPException(status_code=500, detail=f"Error reading config file: {e}")
+        raise HTTPException(status_code=500, detail=f"Error reading file: {e}")
 
 
-@router.post("/printer-configs", response_model=PrinterConfigEntry)
-async def save_printer_config(body: PrinterConfigSaveRequest) -> PrinterConfigEntry:
-    """
-    Save (or overwrite) a printer configuration.
-
-    When ``autosave`` is True the config is written to
-    ``workspace/user_configs/autosave/<name>.json``; otherwise it is written to
-    ``workspace/user_configs/<name>.json``.
-
-    Args:
-        body: SaveRequest with name, config dict, and autosave flag.
-
-    Returns:
-        PrinterConfigEntry: Entry describing the newly saved config.
-
-    Raises:
-        HTTPException 422: If the name is invalid.
-        HTTPException 500: If the file cannot be written.
-    """
+def _save_config(category: ConfigCategory, body: ConfigSaveRequest) -> ConfigEntry:
     try:
         safe = _safe_filename(body.name)
     except ValueError as e:
         raise HTTPException(status_code=422, detail=str(e))
-
-    path = _config_path(safe, autosave=body.autosave)
-
+    path = _category_path(category, safe)
     try:
         path.parent.mkdir(parents=True, exist_ok=True)
         with open(path, "w", encoding="utf-8") as f:
             json.dump(body.config, f, indent=2, ensure_ascii=False)
     except OSError as e:
-        raise HTTPException(status_code=500, detail=f"Error writing config file: {e}")
+        raise HTTPException(status_code=500, detail=f"Error writing file: {e}")
+    return ConfigEntry(name=safe, path=safe, autosave=False)
 
-    return PrinterConfigEntry(name=safe, path=safe, autosave=body.autosave)
 
-
-@router.delete("/printer-configs/{name}")
-async def delete_printer_config(name: str, autosave: bool = False) -> dict:
-    """
-    Delete a saved printer configuration.
-
-    Args:
-        name:     Config name (the stem of the .json file).
-        autosave: When True, delete from the autosave directory.
-
-    Returns:
-        dict: ``{"message": "deleted"}``
-
-    Raises:
-        HTTPException 404: If the config does not exist.
-        HTTPException 500: If the file cannot be deleted.
-    """
-    path = _config_path(name, autosave=autosave)
-
+def _delete_config(category: ConfigCategory, name: str) -> dict:
+    path = _category_path(category, name)
     if not path.exists():
-        raise HTTPException(status_code=404, detail=f"Printer config '{name}' not found")
-
+        raise HTTPException(status_code=404, detail=f"Config '{name}' not found")
     try:
         path.unlink()
     except OSError as e:
-        raise HTTPException(status_code=500, detail=f"Error deleting config file: {e}")
-
+        raise HTTPException(status_code=500, detail=f"Error deleting file: {e}")
     return {"message": "deleted"}
+
+
+# ---------------------------------------------------------------------------
+# /api/autosave/{name}  — flat, shared autosave directory
+# ---------------------------------------------------------------------------
+
+@router.get("/autosave/{name}", response_model=dict)
+async def get_autosave(name: str) -> dict:
+    """Load an autosaved config by name (e.g. printer_config, filament_1)."""
+    path = _autosave_path(name)
+    if not path.exists():
+        raise HTTPException(status_code=404, detail=f"Autosave '{name}' not found")
+    try:
+        with open(path, "r", encoding="utf-8") as f:
+            return json.load(f)
+    except json.JSONDecodeError as e:
+        raise HTTPException(status_code=500, detail=f"Invalid JSON: {e}")
+    except OSError as e:
+        raise HTTPException(status_code=500, detail=f"Error reading file: {e}")
+
+
+@router.post("/autosave/{name}", response_model=dict)
+async def save_autosave(name: str, body: AutosaveSaveRequest) -> dict:
+    """Write an autosave. Creates USER_WORKSPACE/autosave/<name>.json."""
+    path = _autosave_path(name)
+    try:
+        path.parent.mkdir(parents=True, exist_ok=True)
+        with open(path, "w", encoding="utf-8") as f:
+            json.dump(body.config, f, indent=2, ensure_ascii=False)
+    except OSError as e:
+        raise HTTPException(status_code=500, detail=f"Error writing autosave: {e}")
+    return {"name": _safe_filename(name)}
+
+
+@router.delete("/autosave/{name}")
+async def delete_autosave(name: str) -> dict:
+    """Delete an autosave. Returns 200 even if it doesn't exist (idempotent)."""
+    path = _autosave_path(name)
+    try:
+        if path.exists():
+            path.unlink()
+    except OSError as e:
+        raise HTTPException(status_code=500, detail=f"Error deleting autosave: {e}")
+    return {"message": "deleted"}
+
+
+# ---------------------------------------------------------------------------
+# /api/printer-configs
+# ---------------------------------------------------------------------------
+
+@router.get("/printer-configs", response_model=list[ConfigEntry])
+async def list_printer_configs() -> list[ConfigEntry]:
+    return _list_configs("printer")
+
+@router.get("/printer-configs/{name}", response_model=dict)
+async def get_printer_config(name: str, autosave: bool = False) -> dict:
+    # autosave param kept for backward-compat; forward to /api/autosave if needed
+    if autosave:
+        return await get_autosave(name)
+    return _get_config("printer", name)
+
+@router.post("/printer-configs", response_model=ConfigEntry)
+async def save_printer_config(body: ConfigSaveRequest) -> ConfigEntry:
+    if body.autosave:
+        await save_autosave(body.name, AutosaveSaveRequest(config=body.config))
+        return ConfigEntry(name=_safe_filename(body.name), path=_safe_filename(body.name), autosave=True)
+    return _save_config("printer", body)
+
+@router.delete("/printer-configs/{name}")
+async def delete_printer_config(name: str, autosave: bool = False) -> dict:
+    if autosave:
+        return await delete_autosave(name)
+    return _delete_config("printer", name)
+
+
+# ---------------------------------------------------------------------------
+# /api/filament-configs
+# ---------------------------------------------------------------------------
+
+@router.get("/filament-configs", response_model=list[ConfigEntry])
+async def list_filament_configs() -> list[ConfigEntry]:
+    return _list_configs("filament")
+
+@router.get("/filament-configs/{name}", response_model=dict)
+async def get_filament_config(name: str, autosave: bool = False) -> dict:
+    if autosave:
+        return await get_autosave(name)
+    return _get_config("filament", name)
+
+@router.post("/filament-configs", response_model=ConfigEntry)
+async def save_filament_config(body: ConfigSaveRequest) -> ConfigEntry:
+    if body.autosave:
+        await save_autosave(body.name, AutosaveSaveRequest(config=body.config))
+        return ConfigEntry(name=_safe_filename(body.name), path=_safe_filename(body.name), autosave=True)
+    return _save_config("filament", body)
+
+@router.delete("/filament-configs/{name}")
+async def delete_filament_config(name: str, autosave: bool = False) -> dict:
+    if autosave:
+        return await delete_autosave(name)
+    return _delete_config("filament", name)
+
+
+# ---------------------------------------------------------------------------
+# /api/process-configs
+# ---------------------------------------------------------------------------
+
+@router.get("/process-configs", response_model=list[ConfigEntry])
+async def list_process_configs() -> list[ConfigEntry]:
+    return _list_configs("process")
+
+@router.get("/process-configs/{name}", response_model=dict)
+async def get_process_config_endpoint(name: str, autosave: bool = False) -> dict:
+    if autosave:
+        return await get_autosave(name)
+    return _get_config("process", name)
+
+@router.post("/process-configs", response_model=ConfigEntry)
+async def save_process_config(body: ConfigSaveRequest) -> ConfigEntry:
+    if body.autosave:
+        await save_autosave(body.name, AutosaveSaveRequest(config=body.config))
+        return ConfigEntry(name=_safe_filename(body.name), path=_safe_filename(body.name), autosave=True)
+    return _save_config("process", body)
+
+@router.delete("/process-configs/{name}")
+async def delete_process_config(name: str, autosave: bool = False) -> dict:
+    if autosave:
+        return await delete_autosave(name)
+    return _delete_config("process", name)

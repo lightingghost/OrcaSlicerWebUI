@@ -2,6 +2,8 @@ export { PrinterSelector } from './PrinterSelector';
 export { PrinterConfigDialog } from './PrinterConfigDialog';
 export type { PrinterConfig, PrinterConfigDialogProps } from './PrinterConfigDialog';
 export { FilamentRow } from './FilamentRow';
+export { FilamentConfigDialog } from './FilamentConfigDialog';
+export type { FilamentConfig, FilamentConfigDialogProps } from './FilamentConfigDialog';
 export { ParameterTabs } from './ParameterTabs';
 export { ParameterPanel } from './ParameterPanel';
 export { ParameterField } from './ParameterField';
