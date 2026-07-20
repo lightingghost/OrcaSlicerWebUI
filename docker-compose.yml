@@ -1,0 +1,36 @@
+# Docker Compose configuration for OrcaSlicer Web UI
+# Full deployment orchestration for frontend and backend services
+
+version: '3.8'
+
+services:
+  frontend:
+    build:
+      context: ./frontend
+      args:
+        - VITE_API_SECRET=${API_SECRET:-changeme}
+    ports:
+      - "80:80"
+    depends_on:
+      - backend
+    restart: unless-stopped
+
+  backend:
+    build: ./backend
+    ports:
+      - "8000:8000"
+    volumes:
+      - ../OrcaSlicer:/app/orca-slicer:ro
+      - workspace:/app/workspace
+    environment:
+      - ORCA_CLI_PATH=/app/orca-slicer/build/linux/OrcaSlicer_ubu64
+      - WORKSPACE_ROOT=/app/workspace
+      - MAX_CONCURRENT_JOBS=4
+      - JOB_TIMEOUT_SECONDS=3600
+      - OUTPUT_RETENTION_SECONDS=86400
+      - JOB_RECORD_RETENTION_SECONDS=604800
+      - API_SECRET=${API_SECRET:-changeme}
+    restart: unless-stopped
+
+volumes:
+  workspace:

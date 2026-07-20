@@ -1,0 +1,32 @@
+# Dependencies
+node_modules
+
+# Build output
+dist
+
+# Development and test files
+.git
+.gitignore
+*.md
+.eslintrc.cjs
+vitest.config.ts
+**/*.test.ts
+**/*.test.tsx
+**/*.property.test.ts
+**/*.property.test.tsx
+**/*.latency.property.test.ts
+**/*.wiring.test.ts
+
+# IDE and editor files
+.vscode
+.idea
+*.swp
+*.swo
+*~
+
+# OS files
+.DS_Store
+Thumbs.db
+
+# Task tracking files
+TASK_*.md

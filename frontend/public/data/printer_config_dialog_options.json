@@ -1,0 +1,1097 @@
+{
+  "tabs": [
+    {
+      "id": "basic",
+      "label": "Basic information",
+      "sections": [
+        {
+          "label": "Printable space",
+          "fields": [
+            {
+              "key": "parallel_printheads_count",
+              "type": "int",
+              "label": "Parallel printheads count",
+              "default": "1"
+            },
+            {
+              "key": "printable_area",
+              "type": "point",
+              "label": "Printable area",
+              "default": "0, 0"
+            },
+            {
+              "key": "bed_exclude_area",
+              "type": "point",
+              "label": "Excluded bed area",
+              "default": "0, 0"
+            },
+            {
+              "key": "printable_height",
+              "type": "float",
+              "label": "Printable height",
+              "unit": "mm",
+              "default": "100.0"
+            },
+            {
+              "key": "support_multi_bed_types",
+              "type": "bool",
+              "label": "Support multi bed types",
+              "default": "false"
+            },
+            {
+              "key": "best_object_pos",
+              "type": "point",
+              "label": "Best object position",
+              "default": "0.5, 0.5"
+            },
+            {
+              "key": "z_offset",
+              "type": "float",
+              "label": "Z offset",
+              "unit": "mm",
+              "default": "0"
+            },
+            {
+              "key": "preferred_orientation",
+              "type": "float",
+              "label": "Preferred orientation",
+              "unit": "°",
+              "default": "0.0"
+            }
+          ]
+        },
+        {
+          "label": "Advanced",
+          "fields": [
+            {
+              "key": "printer_structure",
+              "type": "enum",
+              "label": "Printer structure",
+              "options": [
+                {
+                  "value": "undefine",
+                  "label": "Undefined"
+                },
+                {
+                  "value": "corexy",
+                  "label": "CoreXY"
+                },
+                {
+                  "value": "i3",
+                  "label": "I3"
+                },
+                {
+                  "value": "hbot",
+                  "label": "Hbot"
+                },
+                {
+                  "value": "delta",
+                  "label": "Delta"
+                }
+              ],
+              "default": "undefine"
+            },
+            {
+              "key": "gcode_flavor",
+              "type": "enum",
+              "label": "G-code flavor",
+              "options": [
+                {
+                  "value": "marlin",
+                  "label": "Marlin(legacy)"
+                },
+                {
+                  "value": "klipper",
+                  "label": "Klipper"
+                },
+                {
+                  "value": "reprapfirmware",
+                  "label": "RepRapFirmware"
+                },
+                {
+                  "value": "repetier",
+                  "label": "Repetier"
+                },
+                {
+                  "value": "marlin2",
+                  "label": "Marlin 2"
+                },
+                {
+                  "value": "reprap",
+                  "label": "RepRap/Sprinter"
+                },
+                {
+                  "value": "teacup",
+                  "label": "Teacup"
+                },
+                {
+                  "value": "makerware",
+                  "label": "MakerWare (MakerBot)"
+                },
+                {
+                  "value": "sailfish",
+                  "label": "Sailfish (MakerBot)"
+                },
+                {
+                  "value": "mach3",
+                  "label": "Mach3/LinuxCNC"
+                },
+                {
+                  "value": "machinekit",
+                  "label": "Machinekit"
+                },
+                {
+                  "value": "smoothie",
+                  "label": "Smoothie"
+                },
+                {
+                  "value": "no-extrusion",
+                  "label": "No extrusion"
+                }
+              ],
+              "default": "marlin"
+            },
+            {
+              "key": "pellet_modded_printer",
+              "type": "bool",
+              "label": "Pellet Modded Printer",
+              "default": "false"
+            },
+            {
+              "key": "bbl_use_printhost",
+              "type": "bool",
+              "label": "Use 3rd-party print host",
+              "default": "false"
+            },
+            {
+              "key": "use_3mf",
+              "type": "bool",
+              "label": "Use 3MF instead of G-code",
+              "default": "false"
+            },
+            {
+              "key": "scan_first_layer",
+              "type": "bool",
+              "label": "Scan first layer",
+              "default": "false"
+            },
+            {
+              "key": "enable_power_loss_recovery",
+              "type": "enum",
+              "label": "Power Loss Recovery",
+              "options": [
+                {
+                  "value": "printer_configuration",
+                  "label": "Printer configuration"
+                },
+                {
+                  "value": "enable",
+                  "label": "Enable"
+                },
+                {
+                  "value": "disable",
+                  "label": "Disable"
+                }
+              ],
+              "default": "printer_configuration"
+            },
+            {
+              "key": "disable_m73",
+              "type": "bool",
+              "label": "Disable set remaining print time",
+              "default": "false"
+            },
+            {
+              "key": "thumbnails",
+              "type": "string",
+              "label": "G-code thumbnails",
+              "default": "48x48/PNG"
+            },
+            {
+              "key": "use_relative_e_distances",
+              "type": "bool",
+              "label": "Use relative E distances",
+              "default": "true"
+            },
+            {
+              "key": "use_firmware_retraction",
+              "type": "bool",
+              "label": "Use firmware retraction",
+              "default": "false"
+            },
+            {
+              "key": "time_cost",
+              "type": "float",
+              "label": "Time cost",
+              "unit": "money/h",
+              "default": "0"
+            }
+          ]
+        },
+        {
+          "label": "Cooling Fan",
+          "fields": [
+            {
+              "key": "fan_speedup_time",
+              "type": "float",
+              "label": "Fan speed-up time",
+              "unit": "s",
+              "default": "0"
+            },
+            {
+              "key": "fan_speedup_overhangs",
+              "type": "bool",
+              "label": "Only overhangs",
+              "default": "true"
+            },
+            {
+              "key": "fan_kickstart",
+              "type": "float",
+              "label": "Fan kick-start time",
+              "unit": "s",
+              "default": "0"
+            },
+            {
+              "key": "part_cooling_fan_min_pwm",
+              "type": "int",
+              "label": "Minimum non-zero part cooling fan speed",
+              "unit": "%",
+              "default": "0"
+            }
+          ]
+        },
+        {
+          "label": "Extruder Clearance",
+          "fields": [
+            {
+              "key": "extruder_clearance_radius",
+              "type": "float",
+              "label": "Radius",
+              "unit": "mm",
+              "default": "40"
+            },
+            {
+              "key": "extruder_clearance_height_to_rod",
+              "type": "float",
+              "label": "Height to rod",
+              "unit": "mm",
+              "default": "40"
+            },
+            {
+              "key": "extruder_clearance_height_to_lid",
+              "type": "float",
+              "label": "Height to lid",
+              "unit": "mm",
+              "default": "120"
+            }
+          ]
+        },
+        {
+          "label": "Adaptive bed mesh",
+          "fields": [
+            {
+              "key": "bed_mesh_min",
+              "type": "point",
+              "label": "Bed mesh min",
+              "unit": "mm",
+              "default": "-99999, -99999"
+            },
+            {
+              "key": "bed_mesh_max",
+              "type": "point",
+              "label": "Bed mesh max",
+              "unit": "mm",
+              "default": "99999, 99999"
+            },
+            {
+              "key": "bed_mesh_probe_distance",
+              "type": "point",
+              "label": "Probe point distance",
+              "unit": "mm",
+              "default": "50, 50"
+            },
+            {
+              "key": "adaptive_bed_mesh_margin",
+              "type": "float",
+              "label": "Mesh margin",
+              "unit": "mm",
+              "default": "0"
+            }
+          ]
+        },
+        {
+          "label": "Accessory",
+          "fields": [
+            {
+              "key": "nozzle_type",
+              "type": "enum",
+              "label": "Nozzle type",
+              "options": [
+                {
+                  "value": "undefine",
+                  "label": "Undefined"
+                },
+                {
+                  "value": "hardened_steel",
+                  "label": "Hardened steel"
+                },
+                {
+                  "value": "stainless_steel",
+                  "label": "Stainless steel"
+                },
+                {
+                  "value": "tungsten_carbide",
+                  "label": "Tungsten carbide"
+                },
+                {
+                  "value": "brass",
+                  "label": "Brass"
+                }
+              ]
+            },
+            {
+              "key": "nozzle_hrc",
+              "type": "int",
+              "label": "Nozzle HRC",
+              "unit": "HRC",
+              "default": "0"
+            },
+            {
+              "key": "auxiliary_fan",
+              "type": "bool",
+              "label": "Auxiliary part cooling fan",
+              "default": "false"
+            },
+            {
+              "key": "support_chamber_temp_control",
+              "type": "bool",
+              "label": "Support controlling chamber temperature",
+              "default": "true"
+            },
+            {
+              "key": "support_air_filtration",
+              "type": "bool",
+              "label": "Support air filtration",
+              "default": "true"
+            }
+          ]
+        }
+      ]
+    },
+    {
+      "id": "gcode",
+      "label": "Machine G-code",
+      "sections": [
+        {
+          "label": "File header G-code",
+          "fields": [
+            {
+              "key": "file_start_gcode",
+              "type": "gcode",
+              "label": "File header G-code"
+            }
+          ]
+        },
+        {
+          "label": "Machine start G-code",
+          "fields": [
+            {
+              "key": "machine_start_gcode",
+              "type": "gcode",
+              "label": "Start G-code",
+              "default": "G28 ; home all axes\\nG1 Z5 F5000 ; lift nozzle\\n"
+            }
+          ]
+        },
+        {
+          "label": "Machine end G-code",
+          "fields": [
+            {
+              "key": "machine_end_gcode",
+              "type": "gcode",
+              "label": "End G-code",
+              "default": "M104 S0 ; turn off temperature\\nG28 X0  ; home X axis\\nM84     ; disable motors\\n"
+            }
+          ]
+        },
+        {
+          "label": "Printing by object G-code",
+          "fields": [
+            {
+              "key": "printing_by_object_gcode",
+              "type": "gcode",
+              "label": "Between Object G-code"
+            }
+          ]
+        },
+        {
+          "label": "Before layer change G-code",
+          "fields": [
+            {
+              "key": "before_layer_change_gcode",
+              "type": "gcode",
+              "label": "Before layer change G-code"
+            }
+          ]
+        },
+        {
+          "label": "Layer change G-code",
+          "fields": [
+            {
+              "key": "layer_change_gcode",
+              "type": "gcode",
+              "label": "Layer change G-code"
+            }
+          ]
+        },
+        {
+          "label": "Timelapse G-code",
+          "fields": [
+            {
+              "key": "time_lapse_gcode",
+              "type": "gcode",
+              "label": "Timelapse G-code"
+            }
+          ]
+        },
+        {
+          "label": "Clumping Detection G-code",
+          "fields": [
+            {
+              "key": "wrapping_detection_gcode",
+              "type": "gcode",
+              "label": "Clumping detection G-code"
+            }
+          ]
+        },
+        {
+          "label": "Change filament G-code",
+          "fields": [
+            {
+              "key": "change_filament_gcode",
+              "type": "gcode",
+              "label": "Change filament G-code"
+            }
+          ]
+        },
+        {
+          "label": "Change extrusion role G-code",
+          "fields": [
+            {
+              "key": "change_extrusion_role_gcode",
+              "type": "gcode",
+              "label": "Change extrusion role G-code"
+            }
+          ]
+        },
+        {
+          "label": "Pause G-code",
+          "fields": [
+            {
+              "key": "machine_pause_gcode",
+              "type": "gcode",
+              "label": "Pause G-code"
+            }
+          ]
+        },
+        {
+          "label": "Template Custom G-code",
+          "fields": [
+            {
+              "key": "template_custom_gcode",
+              "type": "gcode",
+              "label": "Custom G-code"
+            }
+          ]
+        }
+      ]
+    },
+    {
+      "id": "multimaterial",
+      "label": "Multimaterial",
+      "sections": [
+        {
+          "label": "Single extruder multi-material setup",
+          "fields": [
+            {
+              "key": "single_extruder_multi_material",
+              "type": "bool",
+              "label": "Single Extruder Multi Material",
+              "default": "true"
+            },
+            {
+              "key": "manual_filament_change",
+              "type": "bool",
+              "label": "Manual Filament Change",
+              "default": "false"
+            },
+            {
+              "key": "bed_temperature_formula",
+              "type": "enum",
+              "label": "Bed temperature type",
+              "options": [
+                {
+                  "value": "by_first_filament",
+                  "label": "By First filament"
+                },
+                {
+                  "value": "by_highest_temp",
+                  "label": "By Highest Temp"
+                }
+              ],
+              "default": "by_first_filament"
+            }
+          ]
+        },
+        {
+          "label": "Wipe tower",
+          "fields": [
+            {
+              "key": "wipe_tower_type",
+              "type": "enum",
+              "label": "Wipe tower type",
+              "options": [
+                {
+                  "value": "type1",
+                  "label": "Type 1"
+                },
+                {
+                  "value": "type2",
+                  "label": "Type 2"
+                }
+              ],
+              "default": "type2"
+            },
+            {
+              "key": "purge_in_prime_tower",
+              "type": "bool",
+              "label": "Purge in prime tower",
+              "default": "true"
+            },
+            {
+              "key": "enable_filament_ramming",
+              "type": "bool",
+              "label": "Enable filament ramming",
+              "default": "true"
+            },
+            {
+              "key": "tool_change_on_wipe_tower",
+              "type": "bool",
+              "label": "Tool change on wipe tower",
+              "default": "false"
+            }
+          ]
+        },
+        {
+          "label": "Single extruder multi-material parameters",
+          "fields": [
+            {
+              "key": "cooling_tube_retraction",
+              "type": "float",
+              "label": "Cooling tube position",
+              "unit": "mm",
+              "default": "91.5"
+            },
+            {
+              "key": "cooling_tube_length",
+              "type": "float",
+              "label": "Cooling tube length",
+              "unit": "mm",
+              "default": "5"
+            },
+            {
+              "key": "parking_pos_retraction",
+              "type": "float",
+              "label": "Filament parking position",
+              "unit": "mm",
+              "default": "92"
+            },
+            {
+              "key": "extra_loading_move",
+              "type": "float",
+              "label": "Extra loading distance",
+              "unit": "mm",
+              "default": "-2"
+            },
+            {
+              "key": "high_current_on_filament_swap",
+              "type": "bool",
+              "label": "High extruder current on filament swap",
+              "default": "0"
+            }
+          ]
+        },
+        {
+          "label": "Advanced",
+          "fields": [
+            {
+              "key": "machine_load_filament_time",
+              "type": "float",
+              "label": "Filament load time",
+              "unit": "s",
+              "default": "0.0"
+            },
+            {
+              "key": "machine_unload_filament_time",
+              "type": "float",
+              "label": "Filament unload time",
+              "unit": "s",
+              "default": "0.0"
+            },
+            {
+              "key": "machine_tool_change_time",
+              "type": "float",
+              "label": "Tool change time",
+              "unit": "s",
+              "default": "0"
+            }
+          ]
+        }
+      ]
+    },
+    {
+      "id": "extruder",
+      "label": "Extruder",
+      "sections": [
+        {
+          "label": "Basic information",
+          "fields": [
+            {
+              "key": "nozzle_diameter",
+              "type": "float",
+              "label": "Nozzle diameter",
+              "unit": "mm",
+              "default": "0.4"
+            },
+            {
+              "key": "nozzle_volume",
+              "type": "float",
+              "label": "Nozzle volume",
+              "unit": "mm³"
+            },
+            {
+              "key": "extruder_printable_height",
+              "type": "float",
+              "label": "Extruder printable height",
+              "unit": "mm",
+              "default": "0"
+            },
+            {
+              "key": "extruder_printable_area",
+              "type": "string",
+              "label": "Extruder printable area"
+            }
+          ]
+        },
+        {
+          "label": "Layer height limits",
+          "fields": [
+            {
+              "key": "min_layer_height",
+              "type": "float",
+              "label": "Min",
+              "unit": "mm",
+              "default": "0.07"
+            },
+            {
+              "key": "max_layer_height",
+              "type": "float",
+              "label": "Max",
+              "unit": "mm",
+              "default": "0"
+            }
+          ]
+        },
+        {
+          "label": "Position",
+          "fields": [
+            {
+              "key": "extruder_offset",
+              "type": "point",
+              "label": "Extruder offset",
+              "unit": "mm",
+              "default": "0, 0"
+            }
+          ]
+        },
+        {
+          "label": "Retraction",
+          "fields": [
+            {
+              "key": "retraction_length",
+              "type": "float",
+              "label": "Retraction Length",
+              "unit": "mm",
+              "default": "0.8"
+            },
+            {
+              "key": "retract_restart_extra",
+              "type": "float",
+              "label": "Extra length on restart",
+              "unit": "mm",
+              "default": "0"
+            },
+            {
+              "key": "retraction_speed",
+              "type": "float",
+              "label": "Retraction speed",
+              "unit": "mm/s",
+              "default": "30"
+            },
+            {
+              "key": "deretraction_speed",
+              "type": "float",
+              "label": "Deretraction speed",
+              "unit": "mm/s",
+              "default": "0"
+            },
+            {
+              "key": "retraction_minimum_travel",
+              "type": "float",
+              "label": "Travel distance threshold",
+              "unit": "mm",
+              "default": "2"
+            },
+            {
+              "key": "retract_when_changing_layer",
+              "type": "bool",
+              "label": "Retract on layer change",
+              "default": "false"
+            },
+            {
+              "key": "wipe",
+              "type": "bool",
+              "label": "Wipe while retracting",
+              "default": "false"
+            },
+            {
+              "key": "wipe_distance",
+              "type": "float",
+              "label": "Wipe distance",
+              "unit": "mm",
+              "default": "1"
+            },
+            {
+              "key": "retract_before_wipe",
+              "type": "float",
+              "label": "Retract amount before wipe",
+              "unit": "%",
+              "default": "100"
+            }
+          ]
+        },
+        {
+          "label": "Z-Hop",
+          "fields": [
+            {
+              "key": "retract_lift_enforce",
+              "type": "enum",
+              "label": "On surfaces",
+              "options": [
+                {
+                  "value": "All Surfaces",
+                  "label": "All Surfaces"
+                },
+                {
+                  "value": "Top Only",
+                  "label": "Top Only"
+                },
+                {
+                  "value": "Bottom Only",
+                  "label": "Bottom Only"
+                },
+                {
+                  "value": "Top and Bottom",
+                  "label": "Top and Bottom"
+                }
+              ],
+              "default": "All Surfaces"
+            },
+            {
+              "key": "z_hop_types",
+              "type": "enum",
+              "label": "Z-hop type",
+              "options": [
+                {
+                  "value": "Auto Lift",
+                  "label": "Auto"
+                },
+                {
+                  "value": "Normal Lift",
+                  "label": "Normal"
+                },
+                {
+                  "value": "Slope Lift",
+                  "label": "Slope"
+                },
+                {
+                  "value": "Spiral Lift",
+                  "label": "Spiral"
+                }
+              ],
+              "default": "Auto Lift"
+            },
+            {
+              "key": "z_hop",
+              "type": "float",
+              "label": "Z-hop height",
+              "unit": "mm",
+              "default": "0.4"
+            },
+            {
+              "key": "travel_slope",
+              "type": "float",
+              "label": "Traveling angle",
+              "unit": "°",
+              "default": "3"
+            },
+            {
+              "key": "retract_lift_above",
+              "type": "float",
+              "label": "Only lift Z above",
+              "unit": "mm",
+              "default": "0"
+            },
+            {
+              "key": "retract_lift_below",
+              "type": "float",
+              "label": "Only lift Z below",
+              "unit": "mm",
+              "default": "0"
+            }
+          ]
+        },
+        {
+          "label": "Retraction when switching material",
+          "fields": [
+            {
+              "key": "retract_length_toolchange",
+              "type": "float",
+              "label": "Retraction Length (Toolchange)",
+              "unit": "mm",
+              "default": "10"
+            },
+            {
+              "key": "retract_restart_extra_toolchange",
+              "type": "float",
+              "label": "Extra length on restart",
+              "unit": "mm",
+              "default": "0"
+            },
+            {
+              "key": "long_retractions_when_cut",
+              "type": "bool",
+              "label": "Long retraction when cut (beta)",
+              "default": "false"
+            },
+            {
+              "key": "retraction_distances_when_cut",
+              "type": "float",
+              "label": "Retraction distance when cut",
+              "default": "18"
+            }
+          ]
+        }
+      ]
+    },
+    {
+      "id": "motion",
+      "label": "Motion ability",
+      "sections": [
+        {
+          "label": "Advanced",
+          "fields": [
+            {
+              "key": "emit_machine_limits_to_gcode",
+              "type": "bool",
+              "label": "Emit limits to G-code",
+              "default": "true"
+            }
+          ]
+        },
+        {
+          "label": "Resonance Compensation",
+          "fields": [
+            {
+              "key": "resonance_avoidance",
+              "type": "bool",
+              "label": "Resonance avoidance",
+              "default": "false"
+            },
+            {
+              "key": "min_resonance_avoidance_speed",
+              "type": "float",
+              "label": "Min",
+              "unit": "mm/s",
+              "default": "70"
+            },
+            {
+              "key": "max_resonance_avoidance_speed",
+              "type": "float",
+              "label": "Max",
+              "unit": "mm/s",
+              "default": "120"
+            },
+            {
+              "key": "input_shaping_emit",
+              "type": "bool",
+              "label": "Emit input shaping",
+              "default": "false"
+            },
+            {
+              "key": "input_shaping_type",
+              "type": "enum",
+              "label": "Input shaper type",
+              "options": []
+            },
+            {
+              "key": "input_shaping_freq_x",
+              "type": "float",
+              "label": "X",
+              "unit": "Hz",
+              "default": "0"
+            },
+            {
+              "key": "input_shaping_freq_y",
+              "type": "float",
+              "label": "Y",
+              "unit": "Hz",
+              "default": "0"
+            },
+            {
+              "key": "input_shaping_damp_x",
+              "type": "float",
+              "label": "X",
+              "default": "0.1"
+            },
+            {
+              "key": "input_shaping_damp_y",
+              "type": "float",
+              "label": "Y",
+              "default": "0.1"
+            }
+          ]
+        },
+        {
+          "label": "Speed limitation",
+          "fields": [
+            {
+              "key": "machine_max_speed_x",
+              "type": "string",
+              "label": "machine_max_speed_x"
+            },
+            {
+              "key": "machine_max_speed_y",
+              "type": "string",
+              "label": "machine_max_speed_y"
+            },
+            {
+              "key": "machine_max_speed_z",
+              "type": "string",
+              "label": "machine_max_speed_z"
+            },
+            {
+              "key": "machine_max_speed_e",
+              "type": "string",
+              "label": "machine_max_speed_e"
+            }
+          ]
+        },
+        {
+          "label": "Acceleration limitation",
+          "fields": [
+            {
+              "key": "machine_max_acceleration_x",
+              "type": "string",
+              "label": "machine_max_acceleration_x"
+            },
+            {
+              "key": "machine_max_acceleration_y",
+              "type": "string",
+              "label": "machine_max_acceleration_y"
+            },
+            {
+              "key": "machine_max_acceleration_z",
+              "type": "string",
+              "label": "machine_max_acceleration_z"
+            },
+            {
+              "key": "machine_max_acceleration_e",
+              "type": "string",
+              "label": "machine_max_acceleration_e"
+            },
+            {
+              "key": "machine_max_acceleration_extruding",
+              "type": "float",
+              "label": "Maximum acceleration for extruding",
+              "unit": "mm/s²",
+              "default": "1500"
+            },
+            {
+              "key": "machine_max_acceleration_retracting",
+              "type": "float",
+              "label": "Maximum acceleration for retracting",
+              "unit": "mm/s²",
+              "default": "1500"
+            },
+            {
+              "key": "machine_max_acceleration_travel",
+              "type": "float",
+              "label": "Maximum acceleration for travel",
+              "unit": "mm/s²",
+              "default": "0"
+            }
+          ]
+        },
+        {
+          "label": "Jerk limitation",
+          "fields": [
+            {
+              "key": "machine_max_junction_deviation",
+              "type": "float",
+              "label": "Maximum Junction Deviation",
+              "unit": "mm",
+              "default": "0.01"
+            },
+            {
+              "key": "machine_max_jerk_x",
+              "type": "string",
+              "label": "machine_max_jerk_x"
+            },
+            {
+              "key": "machine_max_jerk_y",
+              "type": "string",
+              "label": "machine_max_jerk_y"
+            },
+            {
+              "key": "machine_max_jerk_z",
+              "type": "string",
+              "label": "machine_max_jerk_z"
+            },
+            {
+              "key": "machine_max_jerk_e",
+              "type": "string",
+              "label": "machine_max_jerk_e"
+            }
+          ]
+        }
+      ]
+    },
+    {
+      "id": "notes",
+      "label": "Notes",
+      "sections": [
+        {
+          "label": "Notes",
+          "fields": [
+            {
+              "key": "printer_notes",
+              "type": "gcode",
+              "label": "Printer notes"
+            }
+          ]
+        }
+      ]
+    }
+  ]
+}
