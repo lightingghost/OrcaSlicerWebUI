@@ -82,6 +82,15 @@ export interface ProfileSlice {
   selectedProcessProfile: ProfileEntry | null;
   selectedFilamentProfiles: ProfileEntry[];
   bedSize: { width: number; depth: number } | null; // derived from printer profile
+  /** Center of the printer's `printable_area` polygon, in gcode-absolute
+   * mm coordinates. Some printers' bed_shape is centered at the origin
+   * (e.g. "-110x-110,110x-110,110x110,-110x110"), others have their
+   * origin at the front-left corner (e.g. "0x0,220x0,220x220,0x220") —
+   * this is NOT always (width/2, depth/2), so it must be read from the
+   * polygon itself rather than assumed. Used by the Preview tab's 3D
+   * viewport to translate gcode coordinates onto the plate grid (which is
+   * always drawn centered at the Three.js scene origin). */
+  bedCenter: { x: number; y: number } | null;
   
   // Cache for process profile compatibility
   processProfileCompatibility: Map<string, string[]>;
@@ -118,6 +127,33 @@ const BED_TYPES = [
   'Smooth High Temp Plate',
 ] as const;
 
+/**
+ * Maps each of this app's `BED_TYPES` display labels to the exact
+ * `curr_bed_type` enum VALUE string native OrcaSlicer's CLI expects (as
+ * opposed to the enum's separate, differently-worded display LABEL — see
+ * `PrintConfig.cpp`'s `curr_bed_type` definition:
+ * enum_values = ["Cool Plate", "Engineering Plate", "High Temp Plate",
+ * "Textured PEI Plate", "Textured Cool Plate", "Supertack Plate"], while
+ * enum_labels (what this app's own BED_TYPES array's wording is based on)
+ * = ["Smooth Cool Plate", "Engineering Plate", "Smooth High Temp Plate",
+ * "Textured PEI Plate", "Textured Cool Plate", "Cool Plate (SuperTack)"]).
+ * Passing a LABEL string as `--curr_bed_type=` would not match any of the
+ * enum's real values, so OrcaSlicer would silently fall back to its
+ * compiled-in default (Cool Plate) regardless of what the user picked —
+ * this table is what makes selecting "Textured Cool Plate" in the UI
+ * actually select `textured_cool_plate_temp` from the filament profile
+ * (see `get_bed_temp_key`/`get_bed_temp_1st_layer_key` in
+ * `libslic3r/PrintConfig.hpp`) rather than always using the default.
+ */
+const BED_TYPE_LABEL_TO_ENUM_VALUE: Record<string, string> = {
+  'Cool Plate (SuperTack)': 'Supertack Plate',
+  'Smooth Cool Plate': 'Cool Plate',
+  'Textured Cool Plate': 'Textured Cool Plate',
+  'Textured PEI Plate': 'Textured PEI Plate',
+  'Engineering Plate': 'Engineering Plate',
+  'Smooth High Temp Plate': 'High Temp Plate',
+};
+
 export const createProfileSlice: StateCreator<
   ProfileSlice & ParameterSlice,
   [],
@@ -139,6 +175,7 @@ export const createProfileSlice: StateCreator<
   selectedProcessProfile: null,
   selectedFilamentProfiles: [],
   bedSize: null,
+  bedCenter: null,
   processProfileCompatibility: new Map(),
   userPrinterConfigs: [],
 
@@ -277,6 +314,7 @@ export const createProfileSlice: StateCreator<
       selectedPrinterProfile: profile,
       selectedManufacturer: manufacturer,
       bedSize: null,
+      bedCenter: null,
       printerVariant: null,
       printerSystemName: null,
     });
@@ -353,14 +391,34 @@ export const createProfileSlice: StateCreator<
         set({ printerVariant: String(resolvedData.printer_variant) });
       }
 
-      // Extract bed size from printable_area polygon
+      // Extract bed size from printable_area polygon. printable_area
+      // points may be number pairs OR "XxY" strings, depending on where
+      // the profile came from (materialized JSON vs raw OrcaSlicer config
+      // text) — handle both rather than assuming array-of-numbers.
       if (resolvedData.printable_area && Array.isArray(resolvedData.printable_area)) {
-        const points = resolvedData.printable_area as number[][];
-        const xCoords = points.map((p) => (Array.isArray(p) ? p[0] : 0));
-        const yCoords = points.map((p) => (Array.isArray(p) ? p[1] : 0));
-        const width = Math.max(...xCoords) - Math.min(...xCoords);
-        const depth = Math.max(...yCoords) - Math.min(...yCoords);
-        if (width > 0 && depth > 0) set({ bedSize: { width, depth } });
+        const rawPoints = resolvedData.printable_area as unknown[];
+        const points = rawPoints.map((p) => {
+          if (Array.isArray(p)) return [Number(p[0]), Number(p[1])];
+          if (typeof p === 'string') {
+            const [px, py] = p.split('x').map(Number);
+            return [px, py];
+          }
+          return [0, 0];
+        });
+        const xCoords = points.map((p) => p[0]);
+        const yCoords = points.map((p) => p[1]);
+        const minX = Math.min(...xCoords);
+        const maxX = Math.max(...xCoords);
+        const minY = Math.min(...yCoords);
+        const maxY = Math.max(...yCoords);
+        const width = maxX - minX;
+        const depth = maxY - minY;
+        if (width > 0 && depth > 0) {
+          set({
+            bedSize: { width, depth },
+            bedCenter: { x: (minX + maxX) / 2, y: (minY + maxY) / 2 },
+          });
+        }
       }
     } catch (error) {
       console.error('Failed to extract printer info from profile:', error);
@@ -369,6 +427,21 @@ export const createProfileSlice: StateCreator<
 
   selectBedType: (bedType: string) => {
     set({ selectedBedType: bedType });
+
+    // Previously this only updated UI/autosave state — `selectedBedType`
+    // was never actually sent to the CLI, so the bed temperature always
+    // used whichever plate OrcaSlicer's own compiled-in default picks
+    // (Cool Plate), completely ignoring what the user selected here (e.g.
+    // choosing "Textured Cool Plate" had no effect on bed temp at all).
+    // Push the corresponding `curr_bed_type` enum value into
+    // parameter_overrides so the CLI invocation actually carries it —
+    // OrcaSlicer's own `get_bed_temp_key`/`get_bed_temp_1st_layer_key`
+    // (libslic3r/PrintConfig.hpp) then correctly reads e.g.
+    // `textured_cool_plate_temp` out of the selected filament profile.
+    const enumValue = BED_TYPE_LABEL_TO_ENUM_VALUE[bedType];
+    if (enumValue) {
+      get().setOverride('curr_bed_type', enumValue);
+    }
   },
 
   selectProcessProfile: async (profile: ProfileEntry, preserveAutosave = false) => {
@@ -602,6 +675,20 @@ export const createProfileSlice: StateCreator<
       }
       
       set(stateUpdate);
+
+      // Re-apply the curr_bed_type parameter_overrides entry for the
+      // restored bed type — set(stateUpdate) above only restores
+      // selectedBedType's UI/display state directly, bypassing
+      // selectBedType()'s override-setting logic, so without this a
+      // reloaded page would show the correct bed type dropdown selection
+      // but silently lose the actual CLI-facing override (falling back to
+      // OrcaSlicer's default bed temp on the next slice).
+      if (stateUpdate.selectedBedType) {
+        const enumValue = BED_TYPE_LABEL_TO_ENUM_VALUE[stateUpdate.selectedBedType];
+        if (enumValue) {
+          get().setOverride('curr_bed_type', enumValue);
+        }
+      }
 
       // Re-apply the restored printer profile's resolved data (variant, bed size).
       // Pass preserveAutosave=true so page-load restore does NOT clear the autosave.

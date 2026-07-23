@@ -4,22 +4,30 @@
  * The main application shell that composes:
  * - TopBar: TabNav, TransformToolbar, SliceButton, ExportButton
  * - LeftPanel: 480px fixed width with all configuration components
- * - MainArea: ViewportContainer + JobPanel + JobStatusPanel
+ * - MainArea: ViewportContainer (Prepare tab) or PreviewViewport (Preview
+ *   tab) + JobPanel + JobStatusPanel
  * 
  * This is the root layout for the main slicer interface.
+ * 
+ * The active tab now lives in the Zustand store (`activeTab` /
+ * `setActiveTab`, see previewSlice.ts) rather than local component state,
+ * so job completion can switch to the Preview tab programmatically
+ * (jobSlice's onCompleted/polling handlers do this directly) — matching
+ * native OrcaSlicer, which jumps to its Preview tab automatically once
+ * slicing finishes.
  * 
  * Validates: Requirements 13.1, 13.4
  */
 
-import React, { useState } from 'react';
+import React from 'react';
 import { TopBar } from './TopBar';
 import { LeftPanel } from './LeftPanel';
 import { MainArea } from './MainArea';
-
-type Tab = 'prepare' | 'preview' | 'device' | 'project' | 'calibration';
+import { useStore } from '../../store';
 
 export const Layout: React.FC = () => {
-  const [activeTab, setActiveTab] = useState<Tab>('prepare');
+  const activeTab = useStore((state) => state.activeTab);
+  const setActiveTab = useStore((state) => state.setActiveTab);
 
   return (
     <div className="h-screen max-h-screen bg-gray-900 text-white flex flex-col overflow-hidden">

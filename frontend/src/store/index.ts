@@ -7,6 +7,10 @@ import { TransformSlice, createTransformSlice } from './transformSlice';
 import { ViewportSlice, createViewportSlice } from './viewportSlice';
 import { MiscSlice, createMiscSlice } from './miscSlice';
 import { ActionSlice, createActionSlice } from './actionSlice';
+import { ObjectManipulationSlice, createObjectManipulationSlice } from './objectManipulationSlice';
+import { ArrangeSettingsSlice, createArrangeSettingsSlice } from './arrangeSettingsSlice';
+import { ContextMenuSlice, createContextMenuSlice } from './contextMenuSlice';
+import { PreviewSlice, createPreviewSlice } from './previewSlice';
 
 export type StoreState = FileSlice &
   ProfileSlice &
@@ -15,7 +19,11 @@ export type StoreState = FileSlice &
   TransformSlice &
   ViewportSlice &
   MiscSlice &
-  ActionSlice;
+  ActionSlice &
+  ObjectManipulationSlice &
+  ArrangeSettingsSlice &
+  ContextMenuSlice &
+  PreviewSlice;
 
 export const useStore = create<StoreState>()((...a) => ({
   ...createFileSlice(...a),
@@ -26,6 +34,10 @@ export const useStore = create<StoreState>()((...a) => ({
   ...createViewportSlice(...a),
   ...createMiscSlice(...a),
   ...createActionSlice(...a),
+  ...createObjectManipulationSlice(...a),
+  ...createArrangeSettingsSlice(...a),
+  ...createContextMenuSlice(...a),
+  ...createPreviewSlice(...a),
 }));
 
 // Export individual slice types and interfaces for convenience
@@ -42,6 +54,19 @@ export type {
 export type { ParameterSlice, ParameterDescriptor } from './parameterSlice';
 export type { TransformSlice, TransformOptions } from './transformSlice';
 export type { ViewportSlice, BoundingBox, ModelMetadata } from './viewportSlice';
+export type { CoordinateMode, ObjectTransformSnapshot } from '../lib/objectTransform';
 export type { MiscSlice, MiscOptions, MiscValidationErrors } from './miscSlice';
 export type { ActionSlice, Action, ActionFlags } from './actionSlice';
+export type {
+  ObjectManipulationSlice,
+  TransformTool,
+  PendingTransformCommand,
+} from './objectManipulationSlice';
+export type {
+  ArrangeSettingsSlice,
+  ArrangeSettingsState,
+} from './arrangeSettingsSlice';
+export { DEFAULT_ARRANGE_SETTINGS } from './arrangeSettingsSlice';
+export type { ContextMenuSlice, ContextMenuState } from './contextMenuSlice';
+export type { PreviewSlice, MainTab } from './previewSlice';
 export { validateParameter } from '../lib/validation';

@@ -1,4 +1,6 @@
 import React, { useCallback } from 'react';
+import { useStore } from '../../store';
+import type { Action, ActionFlags } from '../../store';
 
 /**
  * ActionSelector Component
@@ -18,88 +20,53 @@ import React, { useCallback } from 'react';
  * - load_defaultfila
  * - enable_timelapse
  * 
+ * Reads/writes the shared `actionSlice` in the Zustand store so the
+ * selection here is what SubmitButton (and TopBar's Slice/Export buttons)
+ * actually submit — previously this used disconnected local state.
+ * 
  * Validates: Requirements 5.1, 5.2, 5.3, 5.4, 5.6
  */
-
-type Action = 'slice' | 'export_3mf' | 'export_stl' | 'export_stls' | 'export_settings';
-
-interface ActionState {
-  action: Action;
-  plateNumber: number;
-  outputFilename: string;
-  actionFlags: {
-    min_save: boolean;
-    no_check: boolean;
-    normative_check: boolean;
-    uptodate: boolean;
-    load_defaultfila: boolean;
-    enable_timelapse: boolean;
-  };
-}
-
 export const ActionSelector: React.FC = () => {
-  // For now, we'll use local state management
-  // In a real implementation, this would be part of the Zustand store
-  const [actionState, setActionState] = React.useState<ActionState>({
-    action: 'slice',
-    plateNumber: 0,
-    outputFilename: '',
-    actionFlags: {
-      min_save: false,
-      no_check: false,
-      normative_check: false,
-      uptodate: false,
-      load_defaultfila: false,
-      enable_timelapse: false,
-    },
-  });
+  const action = useStore((state) => state.action);
+  const plateNumber = useStore((state) => state.plateNumber);
+  const outputFilename = useStore((state) => state.outputFilename);
+  const actionFlags = useStore((state) => state.actionFlags);
+  const setAction = useStore((state) => state.setAction);
+  const setPlateNumber = useStore((state) => state.setPlateNumber);
+  const setOutputFilename = useStore((state) => state.setOutputFilename);
+  const setActionFlag = useStore((state) => state.setActionFlag);
 
   // Handler for action radio button change
-  const handleActionChange = useCallback((newAction: Action) => {
-    setActionState((prev) => ({
-      ...prev,
-      action: newAction,
-      // Pre-fill default output filenames
-      outputFilename:
-        newAction === 'export_3mf'
-          ? 'output.3mf'
-          : newAction === 'export_settings'
-          ? 'output.json'
-          : prev.outputFilename,
-    }));
-  }, []);
+  const handleActionChange = useCallback(
+    (newAction: Action) => {
+      setAction(newAction);
+    },
+    [setAction]
+  );
 
   // Handler for plate number change
-  const handlePlateNumberChange = useCallback((e: React.ChangeEvent<HTMLSelectElement>) => {
-    setActionState((prev) => ({
-      ...prev,
-      plateNumber: parseInt(e.target.value, 10),
-    }));
-  }, []);
+  const handlePlateNumberChange = useCallback(
+    (e: React.ChangeEvent<HTMLSelectElement>) => {
+      setPlateNumber(parseInt(e.target.value, 10));
+    },
+    [setPlateNumber]
+  );
 
   // Handler for output filename change
-  const handleOutputFilenameChange = useCallback((e: React.ChangeEvent<HTMLInputElement>) => {
-    setActionState((prev) => ({
-      ...prev,
-      outputFilename: e.target.value,
-    }));
-  }, []);
+  const handleOutputFilenameChange = useCallback(
+    (e: React.ChangeEvent<HTMLInputElement>) => {
+      setOutputFilename(e.target.value);
+    },
+    [setOutputFilename]
+  );
 
   // Handler for action flag checkbox change
   const handleActionFlagChange = useCallback(
-    (flagName: keyof ActionState['actionFlags']) => (e: React.ChangeEvent<HTMLInputElement>) => {
-      setActionState((prev) => ({
-        ...prev,
-        actionFlags: {
-          ...prev.actionFlags,
-          [flagName]: e.target.checked,
-        },
-      }));
+    (flagName: keyof ActionFlags) => (e: React.ChangeEvent<HTMLInputElement>) => {
+      setActionFlag(flagName, e.target.checked);
     },
-    []
+    [setActionFlag]
   );
-
-  const { action, plateNumber, outputFilename, actionFlags } = actionState;
 
   return (
     <div className="bg-gray-800 p-4 rounded-lg space-y-4">
@@ -230,7 +197,7 @@ export const ActionSelector: React.FC = () => {
         <label className="flex items-center space-x-2 text-sm text-gray-300 cursor-pointer">
           <input
             type="checkbox"
-            checked={actionFlags.min_save}
+            checked={actionFlags.min_save ?? false}
             onChange={handleActionFlagChange('min_save')}
             className="form-checkbox bg-gray-700 border-gray-600"
           />
@@ -240,7 +207,7 @@ export const ActionSelector: React.FC = () => {
         <label className="flex items-center space-x-2 text-sm text-gray-300 cursor-pointer">
           <input
             type="checkbox"
-            checked={actionFlags.no_check}
+            checked={actionFlags.no_check ?? false}
             onChange={handleActionFlagChange('no_check')}
             className="form-checkbox bg-gray-700 border-gray-600"
           />
@@ -250,7 +217,7 @@ export const ActionSelector: React.FC = () => {
         <label className="flex items-center space-x-2 text-sm text-gray-300 cursor-pointer">
           <input
             type="checkbox"
-            checked={actionFlags.normative_check}
+            checked={actionFlags.normative_check ?? false}
             onChange={handleActionFlagChange('normative_check')}
             className="form-checkbox bg-gray-700 border-gray-600"
           />
@@ -260,7 +227,7 @@ export const ActionSelector: React.FC = () => {
         <label className="flex items-center space-x-2 text-sm text-gray-300 cursor-pointer">
           <input
             type="checkbox"
-            checked={actionFlags.uptodate}
+            checked={actionFlags.uptodate ?? false}
             onChange={handleActionFlagChange('uptodate')}
             className="form-checkbox bg-gray-700 border-gray-600"
           />
@@ -270,7 +237,7 @@ export const ActionSelector: React.FC = () => {
         <label className="flex items-center space-x-2 text-sm text-gray-300 cursor-pointer">
           <input
             type="checkbox"
-            checked={actionFlags.load_defaultfila}
+            checked={actionFlags.load_defaultfila ?? false}
             onChange={handleActionFlagChange('load_defaultfila')}
             className="form-checkbox bg-gray-700 border-gray-600"
           />
@@ -280,7 +247,7 @@ export const ActionSelector: React.FC = () => {
         <label className="flex items-center space-x-2 text-sm text-gray-300 cursor-pointer">
           <input
             type="checkbox"
-            checked={actionFlags.enable_timelapse}
+            checked={actionFlags.enable_timelapse ?? false}
             onChange={handleActionFlagChange('enable_timelapse')}
             className="form-checkbox bg-gray-700 border-gray-600"
           />

@@ -48,7 +48,9 @@ describe('TransformPanel', () => {
 
     expect(rotateInput.value).toBe('0');
     expect(scaleInput.value).toBe('1');
-    expect(arrangeSelect.value).toBe('0');
+    // Default is 2 (native's own "auto arrange" value) — see
+    // transformSlice.ts's comment on why.
+    expect(arrangeSelect.value).toBe('2');
   });
 
   it('updates store when numeric inputs change', async () => {
@@ -73,13 +75,15 @@ describe('TransformPanel', () => {
 
     const ensureOnBedCheckbox = screen.getByLabelText('Ensure On Bed') as HTMLInputElement;
 
-    expect(ensureOnBedCheckbox.checked).toBe(false);
+    // Defaults to checked — see transformSlice.ts's comment on why
+    // ensure_on_bed defaults to true in this app.
+    expect(ensureOnBedCheckbox.checked).toBe(true);
 
     // Toggle checkbox
     fireEvent.click(ensureOnBedCheckbox);
 
     // Boolean changes are not debounced, should update immediately
-    expect(useStore.getState().transforms.ensure_on_bed).toBe(true);
+    expect(useStore.getState().transforms.ensure_on_bed).toBe(false);
   });
 
   it('updates store when select inputs change', () => {
@@ -98,7 +102,10 @@ describe('TransformPanel', () => {
 
     const arrangeSelect = screen.getByLabelText('Arrange Mode') as HTMLSelectElement;
 
-    // Initially, arrange sub-options should not be visible
+    // Default is arrange=2 (native's own "auto arrange" value), which
+    // also shows sub-options — set to 0 first to verify the "hidden" case
+    // before switching to 1.
+    fireEvent.change(arrangeSelect, { target: { value: '0' } });
     expect(screen.queryByText('Arrange Options')).not.toBeInTheDocument();
 
     // Change to Mode 1
@@ -264,13 +271,15 @@ describe('TransformPanel', () => {
     const assembleCheckbox = screen.getByLabelText('Assemble') as HTMLInputElement;
     const convertUnitCheckbox = screen.getByLabelText('Convert Unit') as HTMLInputElement;
 
-    // Toggle all checkboxes
+    // Toggle all checkboxes. ensure_on_bed defaults to true (see
+    // transformSlice.ts), so toggling it flips to false; assemble/
+    // convert_unit default to false, so toggling flips them to true.
     fireEvent.click(ensureOnBedCheckbox);
     fireEvent.click(assembleCheckbox);
     fireEvent.click(convertUnitCheckbox);
 
     const transforms = useStore.getState().transforms;
-    expect(transforms.ensure_on_bed).toBe(true);
+    expect(transforms.ensure_on_bed).toBe(false);
     expect(transforms.assemble).toBe(true);
     expect(transforms.convert_unit).toBe(true);
   });

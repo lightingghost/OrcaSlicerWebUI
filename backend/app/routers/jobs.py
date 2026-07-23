@@ -6,8 +6,10 @@ Handles job submission, listing, status retrieval, cancellation, and output file
 Requirements: 6.1, 6.5, 6.7, 7.4, 9.1, 9.2, 9.3, 9.4, 11.1, 11.4
 """
 
+import base64
 import json
 import re
+import uuid
 from datetime import datetime
 from pathlib import Path
 from typing import Any, Literal, Optional
@@ -95,8 +97,15 @@ class JobRequestModel(BaseModel):
     file_ids: list[str] = Field(min_length=1, description="One or more uploaded file IDs (UUIDs)")
     
     # Profiles (all required)
-    printer_profile_path: str = Field(max_length=512, pattern=r'^[\w\-. /]+$', description="Relative path under resources/profiles/")
-    process_profile_path: str = Field(max_length=512, pattern=r'^[\w\-. /]+$', description="Relative path under resources/profiles/")
+    # Native OrcaSlicer profile filenames commonly include '@' (e.g.
+    # "Generic ABS @Z-Bolt 0.4 nozzle.json"), and some also use '(', ')',
+    # '+' (e.g. vendor/variant annotations). The actual path-traversal
+    # defense is resolve_and_guard's containment check in cli_builder.py —
+    # this pattern is just a coarse charset allowlist, so it must include
+    # every character real profile filenames use or every non-generic
+    # printer/process/filament selection gets rejected with a 422.
+    printer_profile_path: str = Field(max_length=512, pattern=r'^[\w\-. /@()+]+$', description="Relative path under resources/profiles/")
+    process_profile_path: str = Field(max_length=512, pattern=r'^[\w\-. /@()+]+$', description="Relative path under resources/profiles/")
     filament_profile_paths: list[str] = Field(min_length=1, description="One or more filament profile paths")
     
     # Action (exactly one required)
@@ -129,11 +138,12 @@ class JobRequestModel(BaseModel):
     @field_validator("filament_profile_paths")
     @classmethod
     def validate_filament_paths(cls, v: list[str]) -> list[str]:
-        """Validate filament profile path format."""
+        """Validate filament profile path format (see printer_profile_path's
+        pattern comment above for why '@()+' must be allowed)."""
         for path in v:
             if len(path) > 512:
                 raise ValueError(f"Filament profile path too long: {path}")
-            if not re.match(r'^[\w\-. /]+$', path):
+            if not re.match(r'^[\w\-. /@()+]+$', path):
                 raise ValueError(f"Invalid filament profile path format: {path}")
         return v
 
@@ -519,6 +529,193 @@ async def list_job_outputs(
         "status": job_status,
         "output_files": output_files,
     }
+
+
+@router.post("/jobs/{job_id}/thumbnail")
+async def upload_job_thumbnail(
+    job_id: str,
+    request: Request,
+    db: aiosqlite.Connection = Depends(get_db),
+) -> dict[str, Any]:
+    """
+    Attach a PNG thumbnail to a completed slice job: registers it as a
+    regular output file (`thumbnail.png`, downloadable/listable exactly
+    like `plate_1.gcode`) AND splices it directly into the plate's
+    .gcode as a native-format `; THUMBNAIL_BLOCK_START ... ; thumbnail
+    begin WxH size ... ; thumbnail end ... ; THUMBNAIL_BLOCK_END` comment
+    block (see `_splice_thumbnail_into_gcode` below).
+
+    Native OrcaSlicer embeds that exact comment block by calling a
+    thumbnail-rendering callback from `GCode.cpp`'s `_do_export`
+    (`libslic3r/GCode/Thumbnails.hpp`'s `export_thumbnails_to_file`) — but
+    that callback is only ever wired up by the desktop GUI's OpenGL
+    rendering pipeline (`BackgroundSlicingProcess::process_fff`); the
+    headless CLI binary this app invokes always passes `nullptr` for it
+    (confirmed both by reading `OrcaSlicer.cpp`'s `--slice` path AND by
+    directly re-running the CLI with `--thumbnails=140x110/PNG` explicitly
+    set — the flag is accepted and echoed into the gcode's config-dump
+    footer, but `export_thumbnails_to_file`'s `if (thumbnail_cb ==
+    nullptr) return;` guard means no actual thumbnail block ever gets
+    written, no matter what flags are passed). This is a hard limitation
+    of native's own CLI, not something fixable from the argument-passing
+    side.
+
+    Since that block is pure ASCII comments (gcode parsers/viewers
+    universally skip lines starting with ';'), we don't need the CLI's
+    cooperation to produce it — the frontend renders its own live
+    Three.js Prepare-tab viewport (showing the exact plate/model this job
+    just sliced) to a PNG client-side, and this endpoint splices that PNG
+    into the gcode file directly, byte-for-byte equivalent to what native
+    would have written.
+
+    Accepts a raw PNG body (Content-Type: image/png). Rejects jobs that
+    are not yet completed (no point attaching a thumbnail to a job with
+    no output files yet) and validates the body is non-empty and looks
+    like a PNG (starts with the PNG magic bytes) rather than trusting the
+    Content-Type header alone.
+
+    Returns the registered output file's summary (same shape as entries
+    in GET /api/jobs/{job_id}/outputs).
+    """
+    cursor = await db.execute(
+        "SELECT status, output_dir FROM jobs WHERE job_id = ?",
+        (job_id,),
+    )
+    row = await cursor.fetchone()
+    if not row:
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail=f"Job {job_id} not found")
+
+    if row["status"] != "completed":
+        raise HTTPException(
+            status_code=status.HTTP_409_CONFLICT,
+            detail=f"Cannot attach a thumbnail to a job in status '{row['status']}' (must be 'completed')",
+        )
+
+    body = await request.body()
+    if not body:
+        raise HTTPException(status_code=status.HTTP_422_UNPROCESSABLE_ENTITY, detail="Empty thumbnail body")
+
+    # PNG magic bytes: 89 50 4E 47 0D 0A 1A 0A
+    if not body.startswith(b"\x89PNG\r\n\x1a\n"):
+        raise HTTPException(status_code=status.HTTP_422_UNPROCESSABLE_ENTITY, detail="Body is not a valid PNG file")
+
+    output_dir = Path(row["output_dir"])
+    output_dir.mkdir(parents=True, exist_ok=True)
+    thumbnail_path = resolve_and_guard(Path("thumbnail.png"), output_dir)
+    thumbnail_path.write_bytes(body)
+
+    output_file_id = str(uuid.uuid4())
+    created_at = datetime.utcnow().isoformat()
+
+    # Replace any previously-uploaded thumbnail for this job (e.g. the
+    # user re-slices/re-uploads) rather than accumulating duplicate rows.
+    await db.execute(
+        "DELETE FROM output_files WHERE job_id = ? AND filename = ?",
+        (job_id, "thumbnail.png"),
+    )
+    await db.execute(
+        """
+        INSERT INTO output_files
+        (output_file_id, job_id, filename, size_bytes, storage_path, created_at)
+        VALUES (?, ?, ?, ?, ?, ?)
+        """,
+        (output_file_id, job_id, "thumbnail.png", len(body), str(thumbnail_path), created_at),
+    )
+    await db.commit()
+
+    # Also splice the thumbnail directly into the plate's .gcode file, in
+    # the exact same comment-block format native's own CLI would have
+    # written if its thumbnail generator callback weren't hardcoded to
+    # nullptr (see the big doc comment above — this endpoint's whole
+    # reason to exist). Since the block is pure ASCII comments (gcode
+    # parsers/viewers universally skip lines starting with ';'), splicing
+    # it in after the fact produces a byte-for-byte equivalent result to
+    # what native's GCode.cpp `_do_export`/`export_thumbnails_to_file`
+    # would have written, without needing the CLI to cooperate at all.
+    for gcode_path in sorted(output_dir.glob("*.gcode")):
+        _splice_thumbnail_into_gcode(gcode_path, body)
+        # Splicing changes the file's size on disk — refresh the stored
+        # size_bytes so GET /api/jobs/{id} and .../outputs report the
+        # real (now-larger) size rather than a stale pre-splice value.
+        await db.execute(
+            "UPDATE output_files SET size_bytes = ? WHERE job_id = ? AND filename = ?",
+            (gcode_path.stat().st_size, job_id, gcode_path.name),
+        )
+    await db.commit()
+
+    return {
+        "filename": "thumbnail.png",
+        "size_bytes": len(body),
+        "download_url": f"/api/jobs/{job_id}/outputs/thumbnail.png",
+        "created_at": created_at,
+    }
+
+
+def _splice_thumbnail_into_gcode(gcode_path: Path, png_bytes: bytes) -> None:
+    """
+    Insert a native-format thumbnail comment block into an already-sliced
+    .gcode file, matching the exact layout
+    `GCodeThumbnails::export_thumbnails_to_file` writes
+    (libslic3r/GCode/Thumbnails.hpp):
+
+        ; THUMBNAIL_BLOCK_START
+        ;
+        ; thumbnail begin WxH <base64-byte-count>
+        ; <base64, wrapped at 78 chars per line, each line prefixed "; ">
+        ; thumbnail end
+        ; THUMBNAIL_BLOCK_END
+
+    placed immediately after the `; HEADER_BLOCK_END` line (native writes
+    thumbnails right after the header block, before CONFIG_BLOCK/gcode
+    body — see GCode.cpp's `_do_export`). Re-running this on a gcode file
+    that already has a spliced-in block replaces it rather than
+    duplicating it, so re-uploading a thumbnail for the same job is safe.
+
+    Width/height are read directly from the PNG's IHDR chunk (bytes 16-24
+    of a well-formed PNG) rather than trusted from any caller-supplied
+    value, since that's what actually gets embedded in the "thumbnail
+    begin WxH" line that gcode viewers use to size the preview.
+    """
+    if len(png_bytes) < 24:
+        return
+    width = int.from_bytes(png_bytes[16:20], "big")
+    height = int.from_bytes(png_bytes[20:24], "big")
+
+    encoded = base64.b64encode(png_bytes).decode("ascii")
+    max_row_length = 78
+    lines = [f"; thumbnail begin {width}x{height} {len(encoded)}"]
+    while len(encoded) > max_row_length:
+        lines.append(f"; {encoded[:max_row_length]}")
+        encoded = encoded[max_row_length:]
+    if encoded:
+        lines.append(f"; {encoded}")
+    lines.append("; thumbnail end")
+
+    block = "; THUMBNAIL_BLOCK_START\n;\n" + "\n".join(lines) + "\n; THUMBNAIL_BLOCK_END\n\n"
+
+    text = gcode_path.read_text(encoding="utf-8", errors="replace")
+
+    # Strip any previously-spliced block first, so re-uploading doesn't
+    # accumulate duplicates.
+    text = re.sub(
+        r"; THUMBNAIL_BLOCK_START\n.*?; THUMBNAIL_BLOCK_END\n\n?",
+        "",
+        text,
+        flags=re.DOTALL,
+    )
+
+    header_end_marker = "; HEADER_BLOCK_END\n"
+    idx = text.find(header_end_marker)
+    if idx == -1:
+        # No recognizable header block (unexpected gcode shape) — fall
+        # back to prepending, so the thumbnail still ends up in the file
+        # rather than silently being dropped.
+        new_text = block + text
+    else:
+        insert_at = idx + len(header_end_marker)
+        new_text = text[:insert_at] + "\n" + block + text[insert_at:]
+
+    gcode_path.write_text(new_text, encoding="utf-8")
 
 
 @router.get("/jobs/{job_id}/outputs/{filename}")

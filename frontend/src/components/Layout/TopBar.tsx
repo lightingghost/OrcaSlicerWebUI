@@ -3,31 +3,32 @@
  * 
  * The main application header containing:
  * - TabNav: Main navigation tabs (Prepare | Preview | Device | Project | Calibration)
- * - TransformToolbar: Quick action icons for transforms (Move / Rotate / Scale / Arrange)
+ * - Job Options button: opens the CLI-specific options modal
  * - SliceButton: Primary action button (triggers job submission with action='slice')
  * - ExportButton: Secondary action button
+ * 
+ * Move/Rotate/Scale/Arrange tools AND the "Add model" import button live
+ * inside the 3D viewport itself (see ViewportTransformToolbar), not here —
+ * matching the native OrcaSlicer desktop UI's layout.
  * 
  * Validates: Requirements 13.1, 13.4, 5.1
  */
 
 import React, { useState } from 'react';
 import {
-  Move,
-  RotateCw,
-  Maximize2,
-  Grid3x3,
   Play,
   Download,
   ChevronDown,
+  Settings2,
 } from 'lucide-react';
 import { useStore } from '../../store';
-import type { Action } from '../../store';
-
-type Tab = 'prepare' | 'preview' | 'device' | 'project' | 'calibration';
+import type { Action, MainTab } from '../../store';
+import { JobOptionsModal } from '../JobPanel';
+import { OutputFilesDropdown } from './OutputFilesDropdown';
 
 interface TopBarProps {
-  activeTab?: Tab;
-  onTabChange?: (tab: Tab) => void;
+  activeTab?: MainTab;
+  onTabChange?: (tab: MainTab) => void;
 }
 
 export const TopBar: React.FC<TopBarProps> = ({
@@ -35,6 +36,7 @@ export const TopBar: React.FC<TopBarProps> = ({
   onTabChange,
 }) => {
   const [showExportMenu, setShowExportMenu] = useState(false);
+  const [showJobOptions, setShowJobOptions] = useState(false);
 
   // Store selectors
   const uploadedFiles = useStore((state) => state.uploadedFiles);
@@ -50,19 +52,12 @@ export const TopBar: React.FC<TopBarProps> = ({
   const plateNumber = useStore((state) => state.plateNumber);
   const outputFilename = useStore((state) => state.outputFilename);
 
-  const tabs: { id: Tab; label: string }[] = [
+  const tabs: { id: MainTab; label: string }[] = [
     { id: 'prepare', label: 'Prepare' },
     { id: 'preview', label: 'Preview' },
     { id: 'device', label: 'Device' },
     { id: 'project', label: 'Project' },
     { id: 'calibration', label: 'Calibration' },
-  ];
-
-  const transformTools = [
-    { id: 'move', icon: Move, label: 'Move' },
-    { id: 'rotate', icon: RotateCw, label: 'Rotate' },
-    { id: 'scale', icon: Maximize2, label: 'Scale' },
-    { id: 'arrange', icon: Grid3x3, label: 'Arrange' },
   ];
 
   const exportActions: { id: Action; label: string }[] = [
@@ -84,7 +79,10 @@ export const TopBar: React.FC<TopBarProps> = ({
 
     try {
       await submitJob({
-        file_ids: uploadedFiles.map((f) => f.file_id),
+        // source_file_id (not the synthetic clone file_id) so every
+        // instance on the plate — including clones — submits a valid
+        // backend file reference.
+        file_ids: uploadedFiles.map((f) => f.source_file_id),
         printer_profile_path: selectedPrinterProfile!.path,
         process_profile_path: selectedProcessProfile!.path,
         filament_profile_paths: selectedFilamentProfiles.map((f) => f.path),
@@ -109,7 +107,7 @@ export const TopBar: React.FC<TopBarProps> = ({
       setAction(exportAction);
 
       await submitJob({
-        file_ids: uploadedFiles.map((f) => f.file_id),
+        file_ids: uploadedFiles.map((f) => f.source_file_id),
         printer_profile_path: selectedPrinterProfile!.path,
         process_profile_path: selectedProcessProfile!.path,
         filament_profile_paths: selectedFilamentProfiles.map((f) => f.path),
@@ -153,31 +151,37 @@ export const TopBar: React.FC<TopBarProps> = ({
         ))}
       </nav>
 
-      {/* Divider */}
-      <div className="h-8 w-px bg-gray-700" />
-
-      {/* TransformToolbar - Center Section */}
-      <div className="flex gap-2" role="toolbar" aria-label="Transform tools">
-        {transformTools.map((tool) => {
-          const Icon = tool.icon;
-          return (
-            <button
-              key={tool.id}
-              aria-label={tool.label}
-              title={tool.label}
-              className="p-2 text-gray-300 hover:bg-gray-700 hover:text-white rounded transition-colors"
-            >
-              <Icon className="w-5 h-5" />
-            </button>
-          );
-        })}
-      </div>
+      {/* Note: Move/Rotate/Scale/Arrange tools now live inside the 3D
+          viewport itself (see ViewportTransformToolbar), matching the
+          native OrcaSlicer desktop UI where these are viewport overlays,
+          not top-bar buttons. */}
 
       {/* Spacer */}
       <div className="flex-1" />
 
       {/* Action Buttons - Right Section */}
       <div className="flex gap-3">
+        {/* Job Options Button - opens the CLI-specific options modal
+            (Action/Plate/Transform/Advanced). These options have no native
+            OrcaSlicer desktop equivalent, so they live in an on-demand
+            dialog instead of a panel docked under the viewport. */}
+        <button
+          onClick={() => setShowJobOptions(true)}
+          className="
+            flex items-center gap-2 px-3 py-2 text-sm font-medium
+            text-gray-300 hover:bg-gray-700 hover:text-white rounded
+            transition-colors
+          "
+          title="Job options (action, transform, advanced)"
+          aria-label="Open job options"
+        >
+          <Settings2 className="w-4 h-4" />
+          Job Options
+        </button>
+
+        {/* Output Files - only rendered once a job has completed */}
+        <OutputFilesDropdown />
+
         {/* Export Button (Secondary) with Dropdown */}
         <div className="relative">
           <button
@@ -244,6 +248,9 @@ export const TopBar: React.FC<TopBarProps> = ({
           Slice
         </button>
       </div>
+
+      {/* Job Options Modal */}
+      <JobOptionsModal isOpen={showJobOptions} onClose={() => setShowJobOptions(false)} />
     </header>
   );
 };

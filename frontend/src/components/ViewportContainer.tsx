@@ -1,6 +1,6 @@
 import { ThreeViewport } from './ThreeViewport';
 import { ObjectInfoOverlay } from './ObjectInfoOverlay';
-import { UploadDropzone } from './UploadDropzone';
+import { ObjectContextMenu } from './ObjectContextMenu';
 
 /**
  * ViewportContainer Component
@@ -9,7 +9,13 @@ import { UploadDropzone } from './UploadDropzone';
  * Includes:
  * - ThreeViewport: The main Three.js scene
  * - ObjectInfoOverlay: Model information display
- * - UploadDropzone: File upload interface (shows before first file is loaded)
+ * - ObjectContextMenu: Right-click menu (Remove / Clone / Set number of
+ *   instances) opened by right-clicking a plate object
+ * 
+ * Adding models to the plate is done via the "Add" button in
+ * ViewportTransformToolbar (first item, to the left of Move) rather than a
+ * drag-and-drop zone — matching the native OrcaSlicer desktop UI, which has
+ * no drag-and-drop import affordance either.
  * 
  * Additional overlays will be added here (ViewPresetToolbar, AxisGizmo, etc.)
  */
@@ -21,9 +27,9 @@ export const ViewportContainer: React.FC = () => {
       
       {/* Object info overlay (top-right) */}
       <ObjectInfoOverlay />
-      
-      {/* Upload dropzone (full-screen overlay, shows before first file upload) */}
-      <UploadDropzone />
+
+      {/* Right-click object context menu */}
+      <ObjectContextMenu />
     </div>
   );
 };

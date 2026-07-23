@@ -11,6 +11,7 @@ vi.mock('../../store', () => ({
 describe('JobProgressModal', () => {
   const mockDisconnectProgressSocket = vi.fn();
   const mockCancelJob = vi.fn();
+  const mockDismissJob = vi.fn();
   const mockUseStore = useStore as unknown as ReturnType<typeof vi.fn>;
 
   beforeEach(() => {
@@ -319,6 +320,88 @@ describe('JobProgressModal', () => {
     });
 
     consoleErrorSpy.mockRestore();
+  });
+
+  it('renders the failure reason when a job fails, instead of disappearing', () => {
+    mockUseStore.mockImplementation((selector) =>
+      selector({
+        activeJobId: 'job-failed',
+        jobStatus: 'failed',
+        queuePosition: null,
+        progress: null,
+        jobError: 'Relative extruder addressing requires resetting the extruder position...',
+        disconnectProgressSocket: mockDisconnectProgressSocket,
+        cancelJob: mockCancelJob,
+      })
+    );
+
+    render(<JobProgressModal />);
+
+    expect(screen.getByText('Slicing Failed')).toBeInTheDocument();
+    expect(screen.getByText('The slicer reported an error:')).toBeInTheDocument();
+    expect(
+      screen.getByText('Relative extruder addressing requires resetting the extruder position...')
+    ).toBeInTheDocument();
+  });
+
+  it('renders a generic message when a job times out', () => {
+    mockUseStore.mockImplementation((selector) =>
+      selector({
+        activeJobId: 'job-timeout',
+        jobStatus: 'timed_out',
+        queuePosition: null,
+        progress: null,
+        jobError: 'Job timed out after 3600s',
+        disconnectProgressSocket: mockDisconnectProgressSocket,
+        cancelJob: mockCancelJob,
+      })
+    );
+
+    render(<JobProgressModal />);
+
+    expect(screen.getByText('Slicing Timed Out')).toBeInTheDocument();
+    expect(screen.getByText('The job timed out.')).toBeInTheDocument();
+    expect(screen.getByText('Job timed out after 3600s')).toBeInTheDocument();
+  });
+
+  it('shows a dismissible close button (no cancel button) once a job has failed', () => {
+    mockUseStore.mockImplementation((selector) =>
+      selector({
+        activeJobId: 'job-failed',
+        jobStatus: 'failed',
+        queuePosition: null,
+        progress: null,
+        jobError: 'Some error',
+        disconnectProgressSocket: mockDisconnectProgressSocket,
+        dismissJob: mockDismissJob,
+        cancelJob: mockCancelJob,
+      })
+    );
+
+    render(<JobProgressModal />);
+
+    expect(screen.getByLabelText('Close modal')).toBeInTheDocument();
+    expect(screen.queryByRole('button', { name: /cancel job/i })).not.toBeInTheDocument();
+  });
+
+  it('calls dismissJob (not just disconnectProgressSocket) when closing a failed job', () => {
+    mockUseStore.mockImplementation((selector) =>
+      selector({
+        activeJobId: 'job-failed',
+        jobStatus: 'failed',
+        queuePosition: null,
+        progress: null,
+        jobError: 'Some error',
+        disconnectProgressSocket: mockDisconnectProgressSocket,
+        dismissJob: mockDismissJob,
+        cancelJob: mockCancelJob,
+      })
+    );
+
+    render(<JobProgressModal />);
+    fireEvent.click(screen.getByLabelText('Close modal'));
+
+    expect(mockDismissJob).toHaveBeenCalledTimes(1);
   });
 
   it('shows header icon for job', () => {

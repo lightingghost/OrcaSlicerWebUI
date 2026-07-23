@@ -3,11 +3,30 @@ import * as THREE from 'three';
 import { buildPlateGrid } from './buildPlateGrid';
 
 describe('buildPlateGrid', () => {
-  it('should create a Group with three children (plate, grid, edges)', () => {
+  it('should create a Group with five children (plate, grid, edges, X axis, Y axis)', () => {
     const group = buildPlateGrid(200, 200);
     
     expect(group).toBeInstanceOf(THREE.Group);
-    expect(group.children.length).toBe(3);
+    expect(group.children.length).toBe(5);
+  });
+
+  it('should create centered origin X/Y coordinate axis lines', () => {
+    const group = buildPlateGrid(200, 200);
+
+    const lines = group.children.filter(
+      (child) => child.type === 'Line' && child instanceof THREE.Line
+    ) as THREE.Line[];
+    expect(lines.length).toBe(2);
+
+    const colors = lines.map((line) => (line.material as THREE.LineBasicMaterial).color.getHex());
+    expect(colors).toContain(0xff5555); // red X axis
+    expect(colors).toContain(0x55cc55); // green Y axis
+
+    // Both lines should pass through the origin (0, 0)
+    for (const line of lines) {
+      const positions = line.geometry.getAttribute('position');
+      expect(positions).toBeDefined();
+    }
   });
 
   it('should create a plate surface mesh', () => {
@@ -62,8 +81,8 @@ describe('buildPlateGrid', () => {
     const smallPlate = buildPlateGrid(150, 150);
     const largePlate = buildPlateGrid(300, 400);
     
-    expect(smallPlate.children.length).toBe(3);
-    expect(largePlate.children.length).toBe(3);
+    expect(smallPlate.children.length).toBe(5);
+    expect(largePlate.children.length).toBe(5);
     
     // Verify the grid sizes are different
     const smallGrid = smallPlate.children.find((c) => c instanceof THREE.GridHelper);
@@ -84,7 +103,7 @@ describe('buildPlateGrid', () => {
     // This gives 10mm spacing
   });
 
-  it('should position plate and edges correctly', () => {
+  it('should position plate and edges correctly (Z-up, lying flat in XY plane)', () => {
     const group = buildPlateGrid(200, 200);
     
     const plateMesh = group.children.find(
@@ -97,9 +116,10 @@ describe('buildPlateGrid', () => {
     expect(edges).toBeDefined();
     
     if (plateMesh && edges) {
-      // Both should be rotated to lie flat in the XZ plane
-      expect(plateMesh.rotation.x).toBeCloseTo(-Math.PI / 2);
-      expect(edges.rotation.x).toBeCloseTo(-Math.PI / 2);
+      // PlaneGeometry already lies flat in the XY plane (Z-up bed convention
+      // used everywhere else in the app), so no rotation is needed.
+      expect(plateMesh.rotation.x).toBeCloseTo(0);
+      expect(edges.rotation.x).toBeCloseTo(0);
     }
   });
 });

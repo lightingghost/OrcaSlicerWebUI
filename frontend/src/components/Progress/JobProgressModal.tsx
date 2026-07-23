@@ -24,7 +24,9 @@ export const JobProgressModal: React.FC = () => {
   const jobStatus = useStore((state) => state.jobStatus);
   const queuePosition = useStore((state) => state.queuePosition);
   const progress = useStore((state) => state.progress);
+  const jobError = useStore((state) => state.jobError);
   const disconnectProgressSocket = useStore((state) => state.disconnectProgressSocket);
+  const dismissJob = useStore((state) => state.dismissJob);
   const cancelJob = useStore((state) => state.cancelJob);
 
   // Listen for warning events via WebSocket
@@ -35,10 +37,17 @@ export const JobProgressModal: React.FC = () => {
     // For now, we'll leave this as a placeholder for future warning handling
   }, [progress]);
 
-  // Don't render the modal if there's no active job or job is not queued/running
-  if (!activeJobId || !jobStatus || !['queued', 'running'].includes(jobStatus)) {
+  // Show the modal while a job is queued/running, AND keep it visible
+  // (in a "failed" state) once it fails/times out, so the user sees WHY
+  // it failed instead of the modal just vanishing — which previously
+  // looked identical to "clicking Slice did nothing" for any real
+  // slicing error (bad profile combo, incompatible gcode settings, etc).
+  const relevantStatuses = ['queued', 'running', 'failed', 'timed_out'];
+  if (!activeJobId || !jobStatus || !relevantStatuses.includes(jobStatus)) {
     return null;
   }
+
+  const isTerminalFailure = jobStatus === 'failed' || jobStatus === 'timed_out';
 
   /**
    * Handle cancel button click
@@ -64,6 +73,13 @@ export const JobProgressModal: React.FC = () => {
   // Determine if we can show a close button (only after job completes/fails)
   const canClose = !['queued', 'running'].includes(jobStatus);
 
+  /** Dismiss the failure state entirely (not just disconnect the socket —
+   * jobStatus itself must be cleared too, otherwise this modal's guard
+   * clause above would keep it visible forever). */
+  const handleDismissFailure = () => {
+    dismissJob();
+  };
+
   return (
     <>
       {/* Modal backdrop */}
@@ -73,30 +89,56 @@ export const JobProgressModal: React.FC = () => {
           {/* Header */}
           <div className="flex items-center justify-between px-6 py-4 border-b border-gray-700">
             <div className="flex items-center">
-              <div className="h-8 w-8 rounded-full bg-blue-500 bg-opacity-20 flex items-center justify-center mr-3">
-                <svg
-                  className="h-5 w-5 text-blue-400"
-                  fill="none"
-                  stroke="currentColor"
-                  viewBox="0 0 24 24"
-                >
-                  <path
-                    strokeLinecap="round"
-                    strokeLinejoin="round"
-                    strokeWidth={2}
-                    d="M9 5H7a2 2 0 00-2 2v12a2 2 0 002 2h10a2 2 0 002-2V7a2 2 0 00-2-2h-2M9 5a2 2 0 002 2h2a2 2 0 002-2M9 5a2 2 0 012-2h2a2 2 0 012 2"
-                  />
-                </svg>
+              <div
+                className={`h-8 w-8 rounded-full flex items-center justify-center mr-3 ${
+                  isTerminalFailure ? 'bg-red-500 bg-opacity-20' : 'bg-blue-500 bg-opacity-20'
+                }`}
+              >
+                {isTerminalFailure ? (
+                  <svg
+                    className="h-5 w-5 text-red-400"
+                    fill="none"
+                    stroke="currentColor"
+                    viewBox="0 0 24 24"
+                  >
+                    <path
+                      strokeLinecap="round"
+                      strokeLinejoin="round"
+                      strokeWidth={2}
+                      d="M12 9v2m0 4h.01m-6.938 4h13.856c1.54 0 2.502-1.667 1.732-3L13.732 4c-.77-1.333-2.694-1.333-3.464 0L3.34 16c-.77 1.333.192 3 1.732 3z"
+                    />
+                  </svg>
+                ) : (
+                  <svg
+                    className="h-5 w-5 text-blue-400"
+                    fill="none"
+                    stroke="currentColor"
+                    viewBox="0 0 24 24"
+                  >
+                    <path
+                      strokeLinecap="round"
+                      strokeLinejoin="round"
+                      strokeWidth={2}
+                      d="M9 5H7a2 2 0 00-2 2v12a2 2 0 002 2h10a2 2 0 002-2V7a2 2 0 00-2-2h-2M9 5a2 2 0 002 2h2a2 2 0 002-2M9 5a2 2 0 012-2h2a2 2 0 012 2"
+                    />
+                  </svg>
+                )}
               </div>
               <h2 className="text-lg font-semibold text-white">
-                {jobStatus === 'queued' ? 'Job Queued' : 'Slicing in Progress'}
+                {jobStatus === 'queued'
+                  ? 'Job Queued'
+                  : jobStatus === 'failed'
+                  ? 'Slicing Failed'
+                  : jobStatus === 'timed_out'
+                  ? 'Slicing Timed Out'
+                  : 'Slicing in Progress'}
               </h2>
             </div>
 
             {/* Close button (only show if job is not active) */}
             {canClose && (
               <button
-                onClick={handleClose}
+                onClick={isTerminalFailure ? handleDismissFailure : handleClose}
                 className="text-gray-400 hover:text-white transition-colors"
                 aria-label="Close modal"
               >
@@ -146,6 +188,22 @@ export const JobProgressModal: React.FC = () => {
 
             {/* Status message (shown when running) */}
             {jobStatus === 'running' && progress && <StatusMessage message={progress.message} />}
+
+            {/* Failure reason — this is the fix for jobs that fail with a
+                real CLI error (bad profile combo, invalid gcode settings,
+                etc): previously the modal just disappeared with no
+                indication of what happened, which looked identical to
+                the Slice button doing nothing at all. */}
+            {isTerminalFailure && (
+              <div className="rounded-lg bg-red-900 bg-opacity-30 border border-red-700 p-4">
+                <p className="text-sm text-red-300 font-medium mb-1">
+                  {jobStatus === 'timed_out' ? 'The job timed out.' : 'The slicer reported an error:'}
+                </p>
+                <p className="text-sm text-red-200 whitespace-pre-wrap break-words font-mono">
+                  {jobError || 'Unknown error'}
+                </p>
+              </div>
+            )}
 
             {/* Warning banner (shown when warning is present) */}
             {/* TODO: Warning state needs to be added to store for full implementation */}

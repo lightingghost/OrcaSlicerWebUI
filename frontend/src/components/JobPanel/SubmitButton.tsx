@@ -97,7 +97,12 @@ export const SubmitButton: React.FC = () => {
 
   // Assemble JobRequest
   const assembleJobRequest = (): JobRequest => {
-    const file_ids = uploadedFiles.map((file) => file.file_id);
+    // Use source_file_id (the real backend file) for every plate object,
+    // including clones — a clone's synthetic file_id was never uploaded,
+    // but repeating its source file's id here still submits one CLI
+    // argument per instance on the plate, matching native's "N instances"
+    // semantics.
+    const file_ids = uploadedFiles.map((file) => file.source_file_id);
 
     const printer_profile_path = selectedPrinterProfile!.path;
     const process_profile_path = selectedProcessProfile!.path;

@@ -1,6 +1,7 @@
-import { describe, it, expect } from 'vitest';
+import { describe, it, expect, beforeEach } from 'vitest';
 import { render, screen, fireEvent } from '@testing-library/react';
 import { ActionSelector } from './ActionSelector';
+import { useStore } from '../../store';
 
 /**
  * Unit tests for ActionSelector component
@@ -11,9 +12,16 @@ import { ActionSelector } from './ActionSelector';
  * Tests verify:
  * - Correct action flag conditional UI (plate selector, output filename input)
  * - Each radio option renders correctly
+ * 
+ * ActionSelector reads/writes the shared Zustand action slice, so the
+ * store must be reset to defaults before each test.
  */
 
 describe('ActionSelector', () => {
+  beforeEach(() => {
+    useStore.getState().resetAction();
+  });
+
   describe('Radio Options Rendering (Requirement 5.1)', () => {
     it('renders all five action radio buttons', () => {
       render(<ActionSelector />);

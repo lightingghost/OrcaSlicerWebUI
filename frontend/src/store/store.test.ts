@@ -48,16 +48,37 @@ describe('Zustand Store Slices', () => {
       rotate_x: 0,
       rotate_y: 0,
       scale: 1,
-      arrange: 0,
+      // Default is 2 (native's own "auto arrange" value), not 0 — see
+      // transformSlice.ts's comment on why.
+      arrange: 2,
       orient: 0,
       repetitions: 1,
-      ensure_on_bed: false,
+      // Default is true, not native CLI's own false — see
+      // transformSlice.ts's comment on why.
+      ensure_on_bed: true,
       assemble: false,
       convert_unit: false,
     };
     state.modelBounds = null;
     state.isOutOfBounds = false;
-    state.cameraPreset = 'home';
+    state.selectedObjectId = null;
+    state.activeTransformTool = 'move';
+    state.isManipulationPanelOpen = false;
+    state.isInfoOverlayOpen = true;
+    state.coordinateMode = 'world';
+    state.uniformScale = true;
+    state.objectTransformSnapshot = null;
+    state.pendingTransformCommand = null;
+    state.isLayOnFacePickModeActive = false;
+    state.arrangeSettings = {
+      spacing: 0,
+      enableRotation: false,
+      allowMultiMaterialsOnSamePlate: true,
+      alignToYAxis: false,
+    };
+    state.isArrangeSettingsOpen = false;
+    state.arrangeRequestId = 0;
+    state.contextMenu = { isOpen: false, position: { x: 0, y: 0 }, targetFileId: null };
     
     // Clear all mocks
     vi.clearAllMocks();
@@ -100,7 +121,13 @@ describe('Zustand Store Slices', () => {
 
       const state = useStore.getState();
       expect(state.uploadedFiles).toHaveLength(1);
-      expect(state.uploadedFiles[0]).toEqual(mockFile);
+      // uploadFile enriches the raw upload response with source_file_id
+      // (== its own file_id for a genuine upload) and is_clone: false.
+      expect(state.uploadedFiles[0]).toEqual({
+        ...mockFile,
+        source_file_id: mockFile.file_id,
+        is_clone: false,
+      });
       expect(state.uploadError).toBeNull();
     });
 
@@ -596,10 +623,18 @@ describe('Zustand Store Slices', () => {
       expect(state.transforms.rotate_x).toBe(0);
       expect(state.transforms.rotate_y).toBe(0);
       expect(state.transforms.scale).toBe(1);
-      expect(state.transforms.arrange).toBe(0);
+      // Default is 2 (native's own "auto arrange" value) — see
+      // transformSlice.ts's comment on why.
+      expect(state.transforms.arrange).toBe(2);
       expect(state.transforms.orient).toBe(0);
       expect(state.transforms.repetitions).toBe(1);
-      expect(state.transforms.ensure_on_bed).toBe(false);
+      // ensure_on_bed defaults to true (not native CLI's own false default)
+      // because this app never sends the viewport's on-screen object
+      // position to the backend — the backend always slices the raw
+      // uploaded file, so it must be told to reposition objects onto the
+      // bed itself, matching what native's desktop GUI does automatically
+      // and unconditionally on import (see transformSlice.ts's comment).
+      expect(state.transforms.ensure_on_bed).toBe(true);
       expect(state.transforms.assemble).toBe(false);
       expect(state.transforms.convert_unit).toBe(false);
     });
@@ -643,11 +678,11 @@ describe('Zustand Store Slices', () => {
     });
 
     it('should reset transforms to default values', () => {
-      // Set various transforms
+      // Set various transforms to non-default values first.
       useStore.getState().setTransform('rotate', 90);
       useStore.getState().setTransform('scale', 1.5);
-      useStore.getState().setTransform('arrange', 2);
-      useStore.getState().setTransform('ensure_on_bed', true);
+      useStore.getState().setTransform('arrange', 0);
+      useStore.getState().setTransform('ensure_on_bed', false);
 
       // Reset
       useStore.getState().resetTransforms();
@@ -655,8 +690,10 @@ describe('Zustand Store Slices', () => {
       const state = useStore.getState();
       expect(state.transforms.rotate).toBe(0);
       expect(state.transforms.scale).toBe(1);
-      expect(state.transforms.arrange).toBe(0);
-      expect(state.transforms.ensure_on_bed).toBe(false);
+      // Defaults are arrange=2 (native's own "auto arrange" value) and
+      // ensure_on_bed=true — see transformSlice.ts's comment on why.
+      expect(state.transforms.arrange).toBe(2);
+      expect(state.transforms.ensure_on_bed).toBe(true);
     });
 
     it('should handle arrange sub-options', () => {
@@ -677,21 +714,115 @@ describe('Zustand Store Slices', () => {
       const state = useStore.getState();
       expect(state.modelBounds).toBeNull();
       expect(state.isOutOfBounds).toBe(false);
-      expect(state.cameraPreset).toBe('home');
+      expect(state.selectedObjectId).toBeNull();
+      expect(state.activeTransformTool).toBe('move');
     });
 
-    it('should set camera preset', () => {
-      useStore.getState().setCameraPreset('top');
-      expect(useStore.getState().cameraPreset).toBe('top');
+    it('should set selected object id', () => {
+      useStore.getState().setSelectedObjectId('file-1');
+      expect(useStore.getState().selectedObjectId).toBe('file-1');
 
-      useStore.getState().setCameraPreset('front');
-      expect(useStore.getState().cameraPreset).toBe('front');
+      useStore.getState().setSelectedObjectId(null);
+      expect(useStore.getState().selectedObjectId).toBeNull();
+    });
 
-      useStore.getState().setCameraPreset('side');
-      expect(useStore.getState().cameraPreset).toBe('side');
+    it('should set active transform tool', () => {
+      useStore.getState().setActiveTransformTool('rotate');
+      expect(useStore.getState().activeTransformTool).toBe('rotate');
 
-      useStore.getState().setCameraPreset('free');
-      expect(useStore.getState().cameraPreset).toBe('free');
+      useStore.getState().setActiveTransformTool('scale');
+      expect(useStore.getState().activeTransformTool).toBe('scale');
+
+      useStore.getState().setActiveTransformTool('move');
+      expect(useStore.getState().activeTransformTool).toBe('move');
+    });
+
+    it('should default the manipulation panel to closed and require an explicit open', () => {
+      expect(useStore.getState().isManipulationPanelOpen).toBe(false);
+
+      useStore.getState().setManipulationPanelOpen(true);
+      expect(useStore.getState().isManipulationPanelOpen).toBe(true);
+
+      useStore.getState().setManipulationPanelOpen(false);
+      expect(useStore.getState().isManipulationPanelOpen).toBe(false);
+    });
+
+    it('should close the manipulation panel when a new object is selected', () => {
+      useStore.getState().setManipulationPanelOpen(true);
+      expect(useStore.getState().isManipulationPanelOpen).toBe(true);
+
+      // Selecting any object (including a different one) must reset the
+      // panel to closed rather than reopening with the last-used tool.
+      useStore.getState().setSelectedObjectId('file-2');
+      // Note: the panel-closing behavior on selection change lives in
+      // ThreeViewport's effect (it needs the mesh refs), not the store
+      // action itself, so we only assert the store's own default here.
+      expect(useStore.getState().selectedObjectId).toBe('file-2');
+    });
+
+    it('should default the info overlay to open and support closing it', () => {
+      expect(useStore.getState().isInfoOverlayOpen).toBe(true);
+
+      useStore.getState().setInfoOverlayOpen(false);
+      expect(useStore.getState().isInfoOverlayOpen).toBe(false);
+
+      useStore.getState().setInfoOverlayOpen(true);
+      expect(useStore.getState().isInfoOverlayOpen).toBe(true);
+    });
+
+    it('should default to world coordinates with uniform scale enabled', () => {
+      const state = useStore.getState();
+      expect(state.coordinateMode).toBe('world');
+      expect(state.uniformScale).toBe(true);
+    });
+
+    it('should dispatch and clear a pending transform command', () => {
+      useStore.getState().dispatchTransformCommand({ type: 'position', axis: 0, value: 5 });
+      expect(useStore.getState().pendingTransformCommand).toEqual({
+        type: 'position',
+        axis: 0,
+        value: 5,
+      });
+
+      useStore.getState().clearTransformCommand();
+      expect(useStore.getState().pendingTransformCommand).toBeNull();
+    });
+
+    it('should default Lay on Face pick mode to inactive and support toggling it', () => {
+      expect(useStore.getState().isLayOnFacePickModeActive).toBe(false);
+
+      useStore.getState().setLayOnFacePickModeActive(true);
+      expect(useStore.getState().isLayOnFacePickModeActive).toBe(true);
+
+      useStore.getState().setLayOnFacePickModeActive(false);
+      expect(useStore.getState().isLayOnFacePickModeActive).toBe(false);
+    });
+
+    it('should dispatch a layOnFace command with the target id and world normal', () => {
+      useStore.getState().dispatchTransformCommand({
+        type: 'layOnFace',
+        targetId: 'file-1',
+        worldNormal: [0, 0, 1],
+      });
+      expect(useStore.getState().pendingTransformCommand).toEqual({
+        type: 'layOnFace',
+        targetId: 'file-1',
+        worldNormal: [0, 0, 1],
+      });
+    });
+
+    it('should dispatch autoOrient commands for both "selected" and "all" scopes', () => {
+      useStore.getState().dispatchTransformCommand({ type: 'autoOrient', scope: 'selected' });
+      expect(useStore.getState().pendingTransformCommand).toEqual({
+        type: 'autoOrient',
+        scope: 'selected',
+      });
+
+      useStore.getState().dispatchTransformCommand({ type: 'autoOrient', scope: 'all' });
+      expect(useStore.getState().pendingTransformCommand).toEqual({
+        type: 'autoOrient',
+        scope: 'all',
+      });
     });
 
     it('should set model bounds', () => {
@@ -720,6 +851,184 @@ describe('Zustand Store Slices', () => {
 
       useStore.getState().setModelBounds(bounds2);
       expect(useStore.getState().modelBounds).toEqual(bounds2);
+    });
+  });
+
+  describe('FileSlice - Clone / Instance Count (right-click context menu)', () => {
+    beforeEach(() => {
+      useStore.setState({
+        uploadedFiles: [
+          {
+            file_id: 'orig-1',
+            filename: 'model.stl',
+            size_bytes: 1000,
+            extension: 'stl',
+            uploaded_at: '2024-01-01',
+            source_file_id: 'orig-1',
+            is_clone: false,
+          },
+        ],
+      });
+      (global.fetch as any).mockResolvedValue({ ok: true });
+    });
+
+    it('duplicateObject adds exactly one clone referencing the same source_file_id', () => {
+      const newId = useStore.getState().duplicateObject('orig-1');
+
+      expect(newId).not.toBe('');
+      const files = useStore.getState().uploadedFiles;
+      expect(files).toHaveLength(2);
+      const clone = files.find((f) => f.file_id === newId);
+      expect(clone).toBeDefined();
+      expect(clone!.is_clone).toBe(true);
+      expect(clone!.source_file_id).toBe('orig-1');
+    });
+
+    it('duplicateObject returns empty string for an unknown file id', () => {
+      const result = useStore.getState().duplicateObject('does-not-exist');
+      expect(result).toBe('');
+      expect(useStore.getState().uploadedFiles).toHaveLength(1);
+    });
+
+    it('setInstanceCount adds clones to reach the requested total', () => {
+      const newIds = useStore.getState().setInstanceCount('orig-1', 3);
+
+      expect(newIds).toHaveLength(2);
+      const files = useStore.getState().uploadedFiles;
+      expect(files).toHaveLength(3);
+      expect(files.filter((f) => f.source_file_id === 'orig-1')).toHaveLength(3);
+    });
+
+    it('setInstanceCount removes clones (never the original) to reach a smaller total', () => {
+      useStore.getState().setInstanceCount('orig-1', 4);
+      expect(useStore.getState().uploadedFiles).toHaveLength(4);
+
+      useStore.getState().setInstanceCount('orig-1', 2);
+      const files = useStore.getState().uploadedFiles;
+      expect(files).toHaveLength(2);
+      expect(files.some((f) => f.file_id === 'orig-1' && !f.is_clone)).toBe(true);
+    });
+
+    it('setInstanceCount clamps to a minimum of 1 and never removes the original', () => {
+      useStore.getState().setInstanceCount('orig-1', 3);
+      useStore.getState().setInstanceCount('orig-1', 0);
+
+      const files = useStore.getState().uploadedFiles;
+      expect(files).toHaveLength(1);
+      expect(files[0].file_id).toBe('orig-1');
+    });
+
+    it('setInstanceCount is a no-op when the count already matches', () => {
+      const result = useStore.getState().setInstanceCount('orig-1', 1);
+      expect(result).toEqual([]);
+      expect(useStore.getState().uploadedFiles).toHaveLength(1);
+    });
+
+    it('removeFile only issues a backend delete once no sibling instance remains', () => {
+      const fetchSpy = global.fetch as any;
+      useStore.getState().duplicateObject('orig-1'); // now 2 instances of orig-1
+      fetchSpy.mockClear();
+
+      // Removing one of two instances should NOT trigger a backend delete
+      // (a sibling still needs the same source file).
+      const files = useStore.getState().uploadedFiles;
+      const cloneId = files.find((f) => f.is_clone)!.file_id;
+      useStore.getState().removeFile(cloneId);
+      expect(fetchSpy).not.toHaveBeenCalled();
+      expect(useStore.getState().uploadedFiles).toHaveLength(1);
+
+      // Removing the last remaining instance SHOULD trigger a backend delete.
+      useStore.getState().removeFile('orig-1');
+      expect(fetchSpy).toHaveBeenCalledWith(
+        '/api/files/orig-1',
+        expect.objectContaining({ method: 'DELETE' })
+      );
+      expect(useStore.getState().uploadedFiles).toHaveLength(0);
+    });
+  });
+
+  describe('ContextMenuSlice', () => {
+    it('defaults to closed', () => {
+      const state = useStore.getState();
+      expect(state.contextMenu.isOpen).toBe(false);
+      expect(state.contextMenu.targetFileId).toBeNull();
+    });
+
+    it('opens with the given target and position', () => {
+      useStore.getState().openContextMenu('file-1', { x: 100, y: 200 });
+      const menu = useStore.getState().contextMenu;
+      expect(menu.isOpen).toBe(true);
+      expect(menu.targetFileId).toBe('file-1');
+      expect(menu.position).toEqual({ x: 100, y: 200 });
+    });
+
+    it('closes and clears the target', () => {
+      useStore.getState().openContextMenu('file-1', { x: 10, y: 10 });
+      useStore.getState().closeContextMenu();
+      const menu = useStore.getState().contextMenu;
+      expect(menu.isOpen).toBe(false);
+      expect(menu.targetFileId).toBeNull();
+    });
+  });
+
+  describe('ArrangeSettingsSlice', () => {
+    it('should default to native OrcaSlicer defaults (spacing 0, rotation off, multi-material on, align-Y off)', () => {
+      const state = useStore.getState();
+      expect(state.arrangeSettings).toEqual({
+        spacing: 0,
+        enableRotation: false,
+        allowMultiMaterialsOnSamePlate: true,
+        alignToYAxis: false,
+      });
+      expect(state.isArrangeSettingsOpen).toBe(false);
+    });
+
+    it('should update individual settings', () => {
+      useStore.getState().setArrangeSetting('spacing', 5);
+      expect(useStore.getState().arrangeSettings.spacing).toBe(5);
+
+      useStore.getState().setArrangeSetting('allowMultiMaterialsOnSamePlate', false);
+      expect(useStore.getState().arrangeSettings.allowMultiMaterialsOnSamePlate).toBe(false);
+    });
+
+    it('should force alignToYAxis off when enableRotation is turned on (mutually exclusive, matching native)', () => {
+      useStore.getState().setArrangeSetting('alignToYAxis', true);
+      expect(useStore.getState().arrangeSettings.alignToYAxis).toBe(true);
+
+      useStore.getState().setArrangeSetting('enableRotation', true);
+      expect(useStore.getState().arrangeSettings.enableRotation).toBe(true);
+      expect(useStore.getState().arrangeSettings.alignToYAxis).toBe(false);
+    });
+
+    it('should reset settings to defaults', () => {
+      useStore.getState().setArrangeSetting('spacing', 10);
+      useStore.getState().setArrangeSetting('enableRotation', true);
+
+      useStore.getState().resetArrangeSettings();
+
+      expect(useStore.getState().arrangeSettings).toEqual({
+        spacing: 0,
+        enableRotation: false,
+        allowMultiMaterialsOnSamePlate: true,
+        alignToYAxis: false,
+      });
+    });
+
+    it('should toggle the settings popup open state', () => {
+      useStore.getState().setArrangeSettingsOpen(true);
+      expect(useStore.getState().isArrangeSettingsOpen).toBe(true);
+
+      useStore.getState().setArrangeSettingsOpen(false);
+      expect(useStore.getState().isArrangeSettingsOpen).toBe(false);
+    });
+
+    it('should increment arrangeRequestId each time triggerArrange is called', () => {
+      const before = useStore.getState().arrangeRequestId;
+      useStore.getState().triggerArrange();
+      expect(useStore.getState().arrangeRequestId).toBe(before + 1);
+
+      useStore.getState().triggerArrange();
+      expect(useStore.getState().arrangeRequestId).toBe(before + 2);
     });
   });
 });

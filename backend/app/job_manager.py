@@ -14,6 +14,7 @@ Requirements: 6.2, 6.3, 6.4, 6.5, 6.6, 7.2, 7.4, 7.5, 7.6
 import asyncio
 import json
 import logging
+import os
 import re
 import uuid
 from datetime import datetime
@@ -26,6 +27,48 @@ from app.cli_builder import build_cli_args, resolve_and_guard
 from app.config import Settings
 
 logger = logging.getLogger(__name__)
+
+
+def _build_subprocess_env(orca_cli_path: Path) -> dict[str, str]:
+    """
+    Build the environment for the OrcaSlicer CLI subprocess.
+
+    The distributed OrcaSlicer AppImage bundles its own shared libraries
+    (under an `orca-runtime`/`lib` directory next to the AppImage's `bin/`)
+    and only resolves them when run through its `AppRun`/`orca-slicer-env`
+    wrapper script, which sets LD_LIBRARY_PATH before exec'ing the real
+    binary. Since job_manager invokes the binary directly (not through that
+    wrapper, so its stdout stays a clean pipe for progress parsing), the
+    same LD_LIBRARY_PATH setup must be replicated here or the process fails
+    immediately with "error while loading shared libraries" and every job
+    fails regardless of how correct the CLI arguments are.
+
+    Mirrors the relevant part of the AppImage's `libexec/orca-slicer-env`:
+    prepend `<AppDir>/lib/orca-runtime` (if present) and `<AppDir>/bin` to
+    LD_LIBRARY_PATH, where AppDir is the orca_cli_path binary's grandparent
+    ('.../bin/orca-slicer' -> AppDir is '...'). Falls back to a no-op
+    (inherited environment) if these directories don't exist — e.g. a
+    system-installed OrcaSlicer binary that doesn't need this.
+    """
+    env = os.environ.copy()
+
+    app_dir = orca_cli_path.resolve().parent.parent
+    bin_dir = app_dir / "bin"
+    runtime_lib_dir = app_dir / "lib" / "orca-runtime"
+
+    ld_library_path_parts = []
+    if runtime_lib_dir.is_dir():
+        ld_library_path_parts.append(str(runtime_lib_dir))
+    if bin_dir.is_dir():
+        ld_library_path_parts.append(str(bin_dir))
+
+    if ld_library_path_parts:
+        existing = env.get("LD_LIBRARY_PATH")
+        if existing:
+            ld_library_path_parts.append(existing)
+        env["LD_LIBRARY_PATH"] = ":".join(ld_library_path_parts)
+
+    return env
 
 
 class JobManager:
@@ -120,12 +163,36 @@ class JobManager:
         job_id = str(uuid.uuid4())
         
         # Prepare job directories
-        session_dir = self.config.session_uploads_dir / session_id
         output_dir = self.config.jobs_output_dir / job_id / "output"
         output_dir.mkdir(parents=True, exist_ok=True)
         
+        # Resolve each file_id to its actual on-disk storage_path (recorded
+        # by the upload endpoint as session_uploads_dir/{session_id}/uploads/
+        # {file_id}.{ext}) rather than assuming a fixed shape — file_ids are
+        # also used for misc.load_custom_gcodes_file_id, so build_cli_args
+        # needs a lookup covering every file_id referenced by the job, not
+        # just file_ids itself.
+        file_ids_to_resolve = set(job_request.get("file_ids", []))
+        custom_gcodes_id = (job_request.get("misc") or {}).get("load_custom_gcodes_file_id")
+        if custom_gcodes_id:
+            file_ids_to_resolve.add(custom_gcodes_id)
+        
+        file_paths: dict[str, Path] = {}
+        if file_ids_to_resolve:
+            async with aiosqlite.connect(self.db_path) as db:
+                await db.execute("PRAGMA foreign_keys = ON")
+                for file_id in file_ids_to_resolve:
+                    cursor = await db.execute(
+                        "SELECT storage_path FROM files WHERE file_id = ? AND session_id = ?",
+                        (file_id, session_id),
+                    )
+                    row = await cursor.fetchone()
+                    if row is None:
+                        raise ValueError(f"File not found: {file_id}")
+                    file_paths[file_id] = Path(row[0])
+        
         # Build CLI args (may raise ValueError on path validation)
-        cli_args = build_cli_args(job_request, self.config, session_dir, output_dir)
+        cli_args = build_cli_args(job_request, self.config, file_paths, output_dir)
         
         # Create job record in database
         async with aiosqlite.connect(self.db_path) as db:
@@ -484,6 +551,7 @@ class JobManager:
                             stdout=asyncio.subprocess.PIPE,
                             stderr=asyncio.subprocess.STDOUT,
                             cwd=str(output_dir),
+                            env=_build_subprocess_env(self.config.orca_cli_path),
                         )
                         
                         # Stream output to log file, collect lines, and parse for progress

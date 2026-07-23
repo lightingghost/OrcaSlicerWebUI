@@ -3,9 +3,12 @@
  * 
  * Tests for the TopBar component including:
  * - Tab navigation rendering and interaction
- * - Transform toolbar buttons
  * - Slice and Export button state management
  * - Store integration for job submission
+ * 
+ * Move/Rotate/Scale/Arrange toolbar tests now live in
+ * ViewportTransformToolbar.test.tsx (that toolbar moved into the 3D
+ * viewport to match the native OrcaSlicer UI).
  */
 
 import { describe, it, expect, vi, beforeEach } from 'vitest';
@@ -24,7 +27,7 @@ describe('TopBar', () => {
   const mockSetAction = vi.fn();
 
   const defaultStoreState = {
-    uploadedFiles: [{ file_id: 'file1', filename: 'test.stl', size_bytes: 1000, extension: 'stl' as const, uploaded_at: '2024-01-01' }],
+    uploadedFiles: [{ file_id: 'file1', filename: 'test.stl', size_bytes: 1000, extension: 'stl' as const, uploaded_at: '2024-01-01', source_file_id: 'file1', is_clone: false }],
     selectedPrinterProfile: { name: 'Printer 1', path: 'printer/1.json', category: 'machine' as const },
     selectedProcessProfile: { name: 'Process 1', path: 'process/1.json', category: 'process' as const },
     selectedFilamentProfiles: [{ name: 'Filament 1', path: 'filament/1.json', category: 'filament' as const }],
@@ -121,15 +124,6 @@ describe('TopBar', () => {
       // Clean up before next iteration
       unmount();
     });
-  });
-
-  it('renders transform toolbar buttons', () => {
-    render(<TopBar />);
-
-    expect(screen.getByRole('button', { name: 'Move' })).toBeInTheDocument();
-    expect(screen.getByRole('button', { name: 'Rotate' })).toBeInTheDocument();
-    expect(screen.getByRole('button', { name: 'Scale' })).toBeInTheDocument();
-    expect(screen.getByRole('button', { name: 'Arrange' })).toBeInTheDocument();
   });
 
   it('renders slice and export buttons', () => {
@@ -274,9 +268,9 @@ describe('TopBar', () => {
 
     const tablist = screen.getByRole('tablist', { name: 'Main navigation' });
     expect(tablist).toBeInTheDocument();
-
-    const toolbar = screen.getByRole('toolbar', { name: 'Transform tools' });
-    expect(toolbar).toBeInTheDocument();
+    // Move/Rotate/Scale/Arrange toolbar now lives inside the 3D viewport
+    // (ViewportTransformToolbar), not in TopBar — see that component's
+    // own tests for its ARIA/toolbar assertions.
   });
 
   it('applies correct visual hierarchy to buttons', () => {

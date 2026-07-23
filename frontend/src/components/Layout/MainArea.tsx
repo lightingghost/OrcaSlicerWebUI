@@ -3,7 +3,10 @@
  * 
  * The main content area containing:
  * - ViewportContainer: The 3D viewport with model, build plate, and overlays
- * - JobPanel: Action selection, transform controls, and submit button
+ *   (this fills essentially the entire main area, matching the native
+ *   OrcaSlicer desktop layout, which has no panel docked under the
+ *   viewport — CLI-specific job options are opened on demand via
+ *   JobOptionsModal instead, see TopBar)
  * - JobStatusPanel: Progress monitoring and output file download
  * 
  * Validates: Requirements 13.1, 13.4
@@ -11,59 +14,50 @@
 
 import React from 'react';
 import { ViewportContainer } from '../ViewportContainer';
-import {
-  ActionSelector,
-  TransformPanel,
-  AdvancedPanel,
-  SubmitButton,
-} from '../JobPanel';
+import { PreviewContainer } from '../Preview/PreviewContainer';
 import {
   JobProgressModal,
   ProgressBar,
   StatusMessage,
   WarningBanner,
   QueuePositionIndicator,
-  OutputFileList,
 } from '../Progress';
 import { useStore } from '../../store';
 
 export const MainArea: React.FC = () => {
-  const { jobStatus, queuePosition, progress, outputFiles, activeJobId } = useStore();
+  const { jobStatus, queuePosition, progress, activeTab } = useStore();
 
-  // Determine if job status panel should be visible
+  // Determine if job status panel should be visible. Completed jobs'
+  // output files are no longer shown here — see TopBar's
+  // OutputFilesDropdown, docked under the Export button (matching native
+  // OrcaSlicer, which surfaces exported/sliced file access near its
+  // Export action rather than as a panel under the viewport).
   const showJobStatus = jobStatus && jobStatus !== 'completed';
-  const showOutputFiles = jobStatus === 'completed' && outputFiles.length > 0;
 
   return (
     <main className="flex-1 flex flex-col min-h-0 overflow-hidden">
-      {/* ViewportContainer - Takes remaining vertical space */}
+      {/* ViewportContainer (Prepare tab) and PreviewContainer (Preview
+          tab) are both kept mounted at all times and toggled via CSS
+          (display: none), rather than conditionally rendered. Object
+          positions (including manual drag placement) live only in the
+          Three.js scene's own mesh transforms, not in the Zustand store —
+          conditionally unmounting ThreeViewport on every tab switch would
+          tear down that scene, so coming back to Prepare would re-fetch
+          and reload each model from scratch, discarding wherever the user
+          had actually placed it and resetting to the loader's default
+          centered position. Keeping both mounted preserves viewport state
+          exactly like native OrcaSlicer's Prepare/Preview tabs do. */}
       <div className="flex-1 min-h-0 relative overflow-hidden">
-        <ViewportContainer />
-      </div>
-
-      {/* JobPanel - Fixed height section at bottom */}
-      <div className="flex-shrink-0 bg-gray-800 border-t border-gray-700">
-        <div className="flex flex-col lg:flex-row gap-4 p-4">
-          {/* Left column: Action + Transform */}
-          <div className="flex-1 space-y-4">
-            <ActionSelector />
-            <TransformPanel />
-          </div>
-
-          {/* Right column: Advanced options */}
-          <div className="flex-1">
-            <AdvancedPanel />
-          </div>
+        <div className={activeTab === 'preview' ? 'hidden' : 'w-full h-full'}>
+          <ViewportContainer />
         </div>
-
-        {/* Submit Button Row */}
-        <div className="px-4 pb-4">
-          <SubmitButton />
+        <div className={activeTab === 'preview' ? 'w-full h-full' : 'hidden'}>
+          <PreviewContainer />
         </div>
       </div>
 
       {/* JobStatusPanel - Conditional rendering based on job state */}
-      {(showJobStatus || showOutputFiles) && (
+      {showJobStatus && (
         <div className="flex-shrink-0 bg-gray-900 border-t-2 border-purple-600 p-4 space-y-3 max-h-64 overflow-y-auto">
           {/* Queue Position Indicator */}
           {jobStatus === 'queued' && queuePosition !== null && queuePosition !== undefined && (
@@ -84,9 +78,6 @@ export const MainArea: React.FC = () => {
           {progress && 'warning' in progress && typeof progress.warning === 'string' && (
             <WarningBanner warning={progress.warning} />
           )}
-
-          {/* Output Files List */}
-          {showOutputFiles && activeJobId && <OutputFileList jobId={activeJobId} />}
         </div>
       )}
 

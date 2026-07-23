@@ -1,5 +1,5 @@
 import { describe, it, expect, beforeEach } from 'vitest';
-import { render, screen } from '@testing-library/react';
+import { render, screen, fireEvent } from '@testing-library/react';
 import { ObjectInfoOverlay } from './ObjectInfoOverlay';
 import { useStore } from '../store';
 
@@ -9,6 +9,7 @@ describe('ObjectInfoOverlay', () => {
     const state = useStore.getState();
     state.setModelBounds(null as any);
     state.setModelMetadata(null as any);
+    state.setInfoOverlayOpen(true);
   });
 
   it('should not render when no model is loaded', () => {
@@ -151,7 +152,7 @@ describe('ObjectInfoOverlay', () => {
     expect(filenameElement.getAttribute('title')).toBe(longFilename);
   });
 
-  it('should display all section headers', () => {
+  it('should display all metric labels', () => {
     const state = useStore.getState();
     
     state.setModelBounds({
@@ -166,11 +167,47 @@ describe('ObjectInfoOverlay', () => {
 
     render(<ObjectInfoOverlay />);
 
-    // Check all section headers are present
-    expect(screen.getByText('Object')).toBeTruthy();
+    // Check all metric labels are present (each shares a row with its value)
     expect(screen.getByText('Dimensions')).toBeTruthy();
     expect(screen.getByText('Volume')).toBeTruthy();
     expect(screen.getByText('Triangles')).toBeTruthy();
+  });
+
+  it('should render a close button that hides the overlay when clicked', () => {
+    const state = useStore.getState();
+
+    state.setModelBounds({
+      min: { x: 0, y: 0, z: 0 },
+      max: { x: 10, y: 10, z: 10 },
+    });
+    state.setModelMetadata({
+      filename: 'test.stl',
+      triangleCount: 100,
+    });
+    state.setInfoOverlayOpen(true);
+
+    render(<ObjectInfoOverlay />);
+    expect(screen.getByText('test.stl')).toBeTruthy();
+
+    fireEvent.click(screen.getByLabelText('Close object parameters'));
+    expect(useStore.getState().isInfoOverlayOpen).toBe(false);
+  });
+
+  it('should not render when isInfoOverlayOpen is false, even with a loaded model', () => {
+    const state = useStore.getState();
+
+    state.setModelBounds({
+      min: { x: 0, y: 0, z: 0 },
+      max: { x: 10, y: 10, z: 10 },
+    });
+    state.setModelMetadata({
+      filename: 'test.stl',
+      triangleCount: 100,
+    });
+    state.setInfoOverlayOpen(false);
+
+    const { container } = render(<ObjectInfoOverlay />);
+    expect(container.firstChild).toBeNull();
   });
 
   it('should be positioned in top-right corner', () => {

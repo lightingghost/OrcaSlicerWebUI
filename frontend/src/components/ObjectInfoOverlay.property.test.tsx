@@ -28,6 +28,7 @@ describe('ObjectInfoOverlay - Property-Based Tests', () => {
       const state = useStore.getState();
       state.setModelBounds(null as any);
       state.setModelMetadata(null as any);
+      state.setInfoOverlayOpen(true);
     });
   });
 
@@ -150,8 +151,9 @@ describe('ObjectInfoOverlay - Property-Based Tests', () => {
           const triangleCountStr = metadata.triangleCount.toLocaleString();
           expect(text).toContain(triangleCountStr);
 
-          // Verify section headers are present
-          expect(text).toContain('Object');
+          // Verify metric labels are present (the "Object" section header
+          // was removed when the panel was made compact — the filename now
+          // sits directly in the header row alongside the close button)
           expect(text).toContain('Dimensions');
           expect(text).toContain('Volume');
           expect(text).toContain('Triangles');

@@ -70,6 +70,22 @@ async def test_db(temp_workspace):
             )
         """)
         
+        # Create files table — JobManager.submit resolves every file_id
+        # referenced by a job request against this table to find its real
+        # on-disk storage_path (see files.py's upload endpoint), so tests
+        # exercising submit() need matching rows here.
+        await db.execute("""
+            CREATE TABLE files (
+                file_id TEXT PRIMARY KEY,
+                session_id TEXT NOT NULL,
+                original_name TEXT NOT NULL,
+                extension TEXT NOT NULL,
+                size_bytes INTEGER NOT NULL,
+                storage_path TEXT NOT NULL,
+                uploaded_at TEXT NOT NULL
+            )
+        """)
+        
         await db.commit()
     
     yield db_path
@@ -120,12 +136,25 @@ async def test_job_submission(test_config, test_db, temp_workspace):
     
     # Create session directory
     session_id = "test-session"
-    session_dir = temp_workspace / "sessions" / session_id
+    session_dir = temp_workspace / "sessions" / session_id / "uploads"
     session_dir.mkdir(parents=True)
     
-    # Create a dummy uploaded file
-    file_id = "test-file.stl"
-    (session_dir / file_id).write_text("dummy stl content")
+    # Create a dummy uploaded file, matching the real upload endpoint's
+    # storage convention: sessions/{session_id}/uploads/{file_id}.{ext}
+    file_id = "11111111-1111-1111-1111-111111111111"
+    storage_path = session_dir / f"{file_id}.stl"
+    storage_path.write_text("dummy stl content")
+    
+    # Record it in the files table so JobManager.submit can resolve it.
+    async with aiosqlite.connect(test_db) as db:
+        await db.execute(
+            """
+            INSERT INTO files (file_id, session_id, original_name, extension, size_bytes, storage_path, uploaded_at)
+            VALUES (?, ?, ?, ?, ?, ?, ?)
+            """,
+            (file_id, session_id, "test-file.stl", "stl", storage_path.stat().st_size, str(storage_path), "2024-01-01T00:00:00Z"),
+        )
+        await db.commit()
     
     # Submit job
     job_request = {

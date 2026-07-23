@@ -1,4 +1,4 @@
-import { describe, it, expect, vi, beforeEach } from 'vitest';
+import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest';
 import { createJobSlice, JobSlice } from './jobSlice';
 import { createProgressSocket } from '../lib/progressSocket';
 
@@ -146,6 +146,8 @@ describe('JobSlice WebSocket Wiring (Task 18.3)', () => {
     getState.mockReturnValue({
       disconnectProgressSocket: slice.disconnectProgressSocket,
       fetchJobHistory: vi.fn(),
+      setActiveTab: vi.fn(),
+      loadGcodePreview: vi.fn(),
     });
 
     // Connect socket
@@ -179,6 +181,132 @@ describe('JobSlice WebSocket Wiring (Task 18.3)', () => {
         ]),
       })
     );
+  });
+
+  it('should switch to the preview tab and load the gcode preview when a completed slice job has a .gcode output', () => {
+    let callbacks: any;
+
+    (createProgressSocket as any).mockImplementation((_jobId: string, _token: string, cbs: any) => {
+      callbacks = cbs;
+      return mockProgressSocket;
+    });
+
+    const setState = vi.fn();
+    const getState = vi.fn();
+    const mockSetActiveTab = vi.fn();
+    const mockLoadGcodePreview = vi.fn();
+
+    const slice = createJobSlice(setState as any, getState as any, undefined as any);
+
+    getState.mockReturnValue({
+      disconnectProgressSocket: slice.disconnectProgressSocket,
+      fetchJobHistory: vi.fn(),
+      setActiveTab: mockSetActiveTab,
+      loadGcodePreview: mockLoadGcodePreview,
+    });
+
+    slice.connectProgressSocket('test-job-gcode');
+
+    const completedEvent = {
+      type: 'completed' as const,
+      job_id: 'test-job-gcode',
+      timestamp: new Date().toISOString(),
+      output_files: [
+        {
+          filename: 'result.json',
+          size_bytes: 200,
+          download_url: '/api/jobs/test-job-gcode/outputs/result.json',
+        },
+        {
+          filename: 'plate_1.gcode',
+          size_bytes: 200000,
+          download_url: '/api/jobs/test-job-gcode/outputs/plate_1.gcode',
+        },
+      ],
+    };
+
+    callbacks.onCompleted(completedEvent);
+
+    expect(mockSetActiveTab).toHaveBeenCalledWith('preview');
+    expect(mockLoadGcodePreview).toHaveBeenCalledWith('/api/jobs/test-job-gcode/outputs/plate_1.gcode');
+  });
+
+  it('should NOT switch tabs for a completed export job with no .gcode output', () => {
+    let callbacks: any;
+
+    (createProgressSocket as any).mockImplementation((_jobId: string, _token: string, cbs: any) => {
+      callbacks = cbs;
+      return mockProgressSocket;
+    });
+
+    const setState = vi.fn();
+    const getState = vi.fn();
+    const mockSetActiveTab = vi.fn();
+    const mockLoadGcodePreview = vi.fn();
+
+    const slice = createJobSlice(setState as any, getState as any, undefined as any);
+
+    getState.mockReturnValue({
+      disconnectProgressSocket: slice.disconnectProgressSocket,
+      fetchJobHistory: vi.fn(),
+      setActiveTab: mockSetActiveTab,
+      loadGcodePreview: mockLoadGcodePreview,
+    });
+
+    slice.connectProgressSocket('test-job-export');
+
+    const completedEvent = {
+      type: 'completed' as const,
+      job_id: 'test-job-export',
+      timestamp: new Date().toISOString(),
+      output_files: [
+        {
+          filename: 'output.3mf',
+          size_bytes: 5000,
+          download_url: '/api/jobs/test-job-export/outputs/output.3mf',
+        },
+      ],
+    };
+
+    callbacks.onCompleted(completedEvent);
+
+    expect(mockSetActiveTab).not.toHaveBeenCalled();
+    expect(mockLoadGcodePreview).not.toHaveBeenCalled();
+  });
+
+  it('dismissJob clears activeJobId/jobStatus/jobError and tears down the socket', () => {
+    let currentState: Partial<JobSlice> = {
+      activeJobId: 'job-to-dismiss',
+      jobStatus: 'failed',
+      jobError: 'Some CLI error',
+    };
+
+    const setState = vi.fn((updater: any) => {
+      if (typeof updater === 'function') {
+        currentState = { ...currentState, ...updater(currentState) };
+      } else {
+        currentState = { ...currentState, ...updater };
+      }
+    });
+
+    const getState = vi.fn(() => ({
+      ...currentState,
+      disconnectProgressSocket: slice.disconnectProgressSocket,
+      dismissJob: slice.dismissJob,
+      fetchJobHistory: vi.fn(),
+      setActiveTab: vi.fn(),
+      loadGcodePreview: vi.fn(),
+    })) as any;
+
+    const slice = createJobSlice(setState, getState, undefined as any);
+
+    slice.connectProgressSocket('job-to-dismiss');
+    slice.dismissJob();
+
+    expect(mockProgressSocket.disconnect).toHaveBeenCalled();
+    expect(currentState.activeJobId).toBeNull();
+    expect(currentState.jobStatus).toBeNull();
+    expect(currentState.jobError).toBeNull();
   });
 
   it('should handle failed event and disconnect socket', () => {
@@ -220,6 +348,75 @@ describe('JobSlice WebSocket Wiring (Task 18.3)', () => {
         jobStatus: 'failed',
       })
     );
+  });
+
+  describe('REST-polling fallback: must stop on terminal status even if post-completion side effects fail', () => {
+    beforeEach(() => {
+      vi.useFakeTimers();
+    });
+
+    afterEach(() => {
+      vi.useRealTimers();
+    });
+
+    it('stops polling on a completed status even when fetching outputs throws (regression: infinite polling loop)', async () => {
+      // Regression test for a real bug: stopPolling() used to run AFTER
+      // the outputs-fetch/preview-load side effect inside the same try
+      // block, so if that side effect ever threw, the outer catch
+      // swallowed the error and polling never stopped — the interval
+      // re-hit GET /api/jobs/{id} and /outputs every 2s forever.
+      let currentState: Partial<JobSlice> = { activeJobId: 'job-poll-bug' };
+
+      const setState = vi.fn((updater: any) => {
+        currentState = { ...currentState, ...(typeof updater === 'function' ? updater(currentState) : updater) };
+      });
+
+      const getState = vi.fn(() => ({
+        ...currentState,
+        disconnectProgressSocket: slice.disconnectProgressSocket,
+        fetchJobHistory: vi.fn(),
+        // Simulate setActiveTab throwing (stand-in for any failure in the
+        // post-completion side-effect chain — a stale bundle missing this
+        // method, a runtime error in loadGcodePreview, etc).
+        setActiveTab: vi.fn(() => {
+          throw new Error('boom');
+        }),
+        loadGcodePreview: vi.fn(),
+      })) as any;
+
+      const slice = createJobSlice(setState, getState, undefined as any);
+
+      (global.fetch as any)
+        // First poll tick: job detail says completed.
+        .mockResolvedValueOnce({
+          ok: true,
+          json: async () => ({ status: 'completed' }),
+        })
+        // Outputs fetch (still inside the same tick) — includes a .gcode
+        // file so the setActiveTab call (which throws) gets reached.
+        .mockResolvedValueOnce({
+          ok: true,
+          json: async () => [
+            { filename: 'plate_1.gcode', size_bytes: 100, download_url: '/x/plate_1.gcode' },
+          ],
+        });
+
+      slice.connectProgressSocket('job-poll-bug');
+
+      // Let the first 2s polling tick fire and its async body resolve.
+      await vi.advanceTimersByTimeAsync(2000);
+
+      // Even though setActiveTab threw mid-tick, polling must have been
+      // stopped already (stopPolling() runs before any of that).
+      const fetchCallCountAfterFirstTick = (global.fetch as any).mock.calls.length;
+
+      // Advance several more polling intervals — if the bug were present,
+      // each 2s tick would issue two more fetch calls (job detail +
+      // outputs) forever.
+      await vi.advanceTimersByTimeAsync(10000);
+
+      expect((global.fetch as any).mock.calls.length).toBe(fetchCallCountAfterFirstTick);
+    });
   });
 
   it('should handle timed_out event and disconnect socket', () => {

@@ -67,7 +67,7 @@ describe('SubmitButton', () => {
 
     it('is disabled when no printer profile is selected', () => {
       const mockStore = createMockStore({
-        uploadedFiles: [{ file_id: '1', filename: 'test.stl', size_bytes: 100, extension: 'stl', uploaded_at: '2024-01-01' }],
+        uploadedFiles: [{ file_id: '1', filename: 'test.stl', size_bytes: 100, extension: 'stl', uploaded_at: '2024-01-01', source_file_id: '1', is_clone: false }],
         selectedPrinterProfile: null,
         selectedProcessProfile: { name: 'Process', path: 'path', category: 'process' },
         selectedFilamentProfiles: [{ name: 'Filament', path: 'path', category: 'filament' }],
@@ -84,7 +84,7 @@ describe('SubmitButton', () => {
 
     it('is disabled when no process profile is selected', () => {
       const mockStore = createMockStore({
-        uploadedFiles: [{ file_id: '1', filename: 'test.stl', size_bytes: 100, extension: 'stl', uploaded_at: '2024-01-01' }],
+        uploadedFiles: [{ file_id: '1', filename: 'test.stl', size_bytes: 100, extension: 'stl', uploaded_at: '2024-01-01', source_file_id: '1', is_clone: false }],
         selectedPrinterProfile: { name: 'Printer', path: 'path', category: 'machine' },
         selectedProcessProfile: null,
         selectedFilamentProfiles: [{ name: 'Filament', path: 'path', category: 'filament' }],
@@ -101,7 +101,7 @@ describe('SubmitButton', () => {
 
     it('is disabled when no filament profiles are selected', () => {
       const mockStore = createMockStore({
-        uploadedFiles: [{ file_id: '1', filename: 'test.stl', size_bytes: 100, extension: 'stl', uploaded_at: '2024-01-01' }],
+        uploadedFiles: [{ file_id: '1', filename: 'test.stl', size_bytes: 100, extension: 'stl', uploaded_at: '2024-01-01', source_file_id: '1', is_clone: false }],
         selectedPrinterProfile: { name: 'Printer', path: 'path', category: 'machine' },
         selectedProcessProfile: { name: 'Process', path: 'path', category: 'process' },
         selectedFilamentProfiles: [],
@@ -118,7 +118,7 @@ describe('SubmitButton', () => {
 
     it('is disabled when parameter validation errors exist', () => {
       const mockStore = createMockStore({
-        uploadedFiles: [{ file_id: '1', filename: 'test.stl', size_bytes: 100, extension: 'stl', uploaded_at: '2024-01-01' }],
+        uploadedFiles: [{ file_id: '1', filename: 'test.stl', size_bytes: 100, extension: 'stl', uploaded_at: '2024-01-01', source_file_id: '1', is_clone: false }],
         selectedPrinterProfile: { name: 'Printer', path: 'path', category: 'machine' },
         selectedProcessProfile: { name: 'Process', path: 'path', category: 'process' },
         selectedFilamentProfiles: [{ name: 'Filament', path: 'path', category: 'filament' }],
@@ -136,7 +136,7 @@ describe('SubmitButton', () => {
 
     it('is disabled when misc validation errors exist', () => {
       const mockStore = createMockStore({
-        uploadedFiles: [{ file_id: '1', filename: 'test.stl', size_bytes: 100, extension: 'stl', uploaded_at: '2024-01-01' }],
+        uploadedFiles: [{ file_id: '1', filename: 'test.stl', size_bytes: 100, extension: 'stl', uploaded_at: '2024-01-01', source_file_id: '1', is_clone: false }],
         selectedPrinterProfile: { name: 'Printer', path: 'path', category: 'machine' },
         selectedProcessProfile: { name: 'Process', path: 'path', category: 'process' },
         selectedFilamentProfiles: [{ name: 'Filament', path: 'path', category: 'filament' }],
@@ -156,7 +156,7 @@ describe('SubmitButton', () => {
   describe('Enabled State (Requirements 2.3, 6.1)', () => {
     it('is enabled when all required conditions are met', () => {
       const mockStore = createMockStore({
-        uploadedFiles: [{ file_id: '1', filename: 'test.stl', size_bytes: 100, extension: 'stl', uploaded_at: '2024-01-01' }],
+        uploadedFiles: [{ file_id: '1', filename: 'test.stl', size_bytes: 100, extension: 'stl', uploaded_at: '2024-01-01', source_file_id: '1', is_clone: false }],
         selectedPrinterProfile: { name: 'Printer', path: 'printer/path', category: 'machine' },
         selectedProcessProfile: { name: 'Process', path: 'process/path', category: 'process' },
         selectedFilamentProfiles: [{ name: 'Filament', path: 'filament/path', category: 'filament' }],
@@ -177,8 +177,8 @@ describe('SubmitButton', () => {
     it('calls submitJob with correctly assembled JobRequest', async () => {
       const mockStore = createMockStore({
         uploadedFiles: [
-          { file_id: 'file1', filename: 'test1.stl', size_bytes: 100, extension: 'stl', uploaded_at: '2024-01-01' },
-          { file_id: 'file2', filename: 'test2.stl', size_bytes: 200, extension: 'stl', uploaded_at: '2024-01-01' },
+          { file_id: 'file1', filename: 'test1.stl', size_bytes: 100, extension: 'stl', uploaded_at: '2024-01-01', source_file_id: 'file1', is_clone: false },
+          { file_id: 'file2', filename: 'test2.stl', size_bytes: 200, extension: 'stl', uploaded_at: '2024-01-01', source_file_id: 'file2', is_clone: false },
         ],
         selectedPrinterProfile: { name: 'Printer', path: 'printer/path', category: 'machine' },
         selectedProcessProfile: { name: 'Process', path: 'process/path', category: 'process' },
@@ -215,7 +215,7 @@ describe('SubmitButton', () => {
 
     it('includes output_filename for export_3mf action', async () => {
       const mockStore = createMockStore({
-        uploadedFiles: [{ file_id: 'file1', filename: 'test.stl', size_bytes: 100, extension: 'stl', uploaded_at: '2024-01-01' }],
+        uploadedFiles: [{ file_id: 'file1', filename: 'test.stl', size_bytes: 100, extension: 'stl', uploaded_at: '2024-01-01', source_file_id: 'file1', is_clone: false }],
         selectedPrinterProfile: { name: 'Printer', path: 'printer/path', category: 'machine' },
         selectedProcessProfile: { name: 'Process', path: 'process/path', category: 'process' },
         selectedFilamentProfiles: [{ name: 'Filament', path: 'filament/path', category: 'filament' }],
@@ -242,7 +242,7 @@ describe('SubmitButton', () => {
 
     it('includes transforms when set', async () => {
       const mockStore = createMockStore({
-        uploadedFiles: [{ file_id: 'file1', filename: 'test.stl', size_bytes: 100, extension: 'stl', uploaded_at: '2024-01-01' }],
+        uploadedFiles: [{ file_id: 'file1', filename: 'test.stl', size_bytes: 100, extension: 'stl', uploaded_at: '2024-01-01', source_file_id: 'file1', is_clone: false }],
         selectedPrinterProfile: { name: 'Printer', path: 'printer/path', category: 'machine' },
         selectedProcessProfile: { name: 'Process', path: 'process/path', category: 'process' },
         selectedFilamentProfiles: [{ name: 'Filament', path: 'filament/path', category: 'filament' }],
@@ -268,7 +268,7 @@ describe('SubmitButton', () => {
 
     it('includes misc options when set', async () => {
       const mockStore = createMockStore({
-        uploadedFiles: [{ file_id: 'file1', filename: 'test.stl', size_bytes: 100, extension: 'stl', uploaded_at: '2024-01-01' }],
+        uploadedFiles: [{ file_id: 'file1', filename: 'test.stl', size_bytes: 100, extension: 'stl', uploaded_at: '2024-01-01', source_file_id: 'file1', is_clone: false }],
         selectedPrinterProfile: { name: 'Printer', path: 'printer/path', category: 'machine' },
         selectedProcessProfile: { name: 'Process', path: 'process/path', category: 'process' },
         selectedFilamentProfiles: [{ name: 'Filament', path: 'filament/path', category: 'filament' }],
@@ -294,7 +294,7 @@ describe('SubmitButton', () => {
 
     it('includes action flags when set', async () => {
       const mockStore = createMockStore({
-        uploadedFiles: [{ file_id: 'file1', filename: 'test.stl', size_bytes: 100, extension: 'stl', uploaded_at: '2024-01-01' }],
+        uploadedFiles: [{ file_id: 'file1', filename: 'test.stl', size_bytes: 100, extension: 'stl', uploaded_at: '2024-01-01', source_file_id: 'file1', is_clone: false }],
         selectedPrinterProfile: { name: 'Printer', path: 'printer/path', category: 'machine' },
         selectedProcessProfile: { name: 'Process', path: 'process/path', category: 'process' },
         selectedFilamentProfiles: [{ name: 'Filament', path: 'filament/path', category: 'filament' }],
@@ -322,7 +322,7 @@ describe('SubmitButton', () => {
   describe('Loading State (Requirement 6.1)', () => {
     it('displays loading spinner during submission', async () => {
       const mockStore = createMockStore({
-        uploadedFiles: [{ file_id: 'file1', filename: 'test.stl', size_bytes: 100, extension: 'stl', uploaded_at: '2024-01-01' }],
+        uploadedFiles: [{ file_id: 'file1', filename: 'test.stl', size_bytes: 100, extension: 'stl', uploaded_at: '2024-01-01', source_file_id: 'file1', is_clone: false }],
         selectedPrinterProfile: { name: 'Printer', path: 'printer/path', category: 'machine' },
         selectedProcessProfile: { name: 'Process', path: 'process/path', category: 'process' },
         selectedFilamentProfiles: [{ name: 'Filament', path: 'filament/path', category: 'filament' }],
@@ -351,7 +351,7 @@ describe('SubmitButton', () => {
 
     it('is disabled during submission', async () => {
       const mockStore = createMockStore({
-        uploadedFiles: [{ file_id: 'file1', filename: 'test.stl', size_bytes: 100, extension: 'stl', uploaded_at: '2024-01-01' }],
+        uploadedFiles: [{ file_id: 'file1', filename: 'test.stl', size_bytes: 100, extension: 'stl', uploaded_at: '2024-01-01', source_file_id: 'file1', is_clone: false }],
         selectedPrinterProfile: { name: 'Printer', path: 'printer/path', category: 'machine' },
         selectedProcessProfile: { name: 'Process', path: 'process/path', category: 'process' },
         selectedFilamentProfiles: [{ name: 'Filament', path: 'filament/path', category: 'filament' }],
@@ -381,7 +381,7 @@ describe('SubmitButton', () => {
   describe('Error Handling', () => {
     it('displays error message when submission fails', async () => {
       const mockStore = createMockStore({
-        uploadedFiles: [{ file_id: 'file1', filename: 'test.stl', size_bytes: 100, extension: 'stl', uploaded_at: '2024-01-01' }],
+        uploadedFiles: [{ file_id: 'file1', filename: 'test.stl', size_bytes: 100, extension: 'stl', uploaded_at: '2024-01-01', source_file_id: 'file1', is_clone: false }],
         selectedPrinterProfile: { name: 'Printer', path: 'printer/path', category: 'machine' },
         selectedProcessProfile: { name: 'Process', path: 'process/path', category: 'process' },
         selectedFilamentProfiles: [{ name: 'Filament', path: 'filament/path', category: 'filament' }],
@@ -402,7 +402,7 @@ describe('SubmitButton', () => {
 
     it('button is enabled again after error', async () => {
       const mockStore = createMockStore({
-        uploadedFiles: [{ file_id: 'file1', filename: 'test.stl', size_bytes: 100, extension: 'stl', uploaded_at: '2024-01-01' }],
+        uploadedFiles: [{ file_id: 'file1', filename: 'test.stl', size_bytes: 100, extension: 'stl', uploaded_at: '2024-01-01', source_file_id: 'file1', is_clone: false }],
         selectedPrinterProfile: { name: 'Printer', path: 'printer/path', category: 'machine' },
         selectedProcessProfile: { name: 'Process', path: 'process/path', category: 'process' },
         selectedFilamentProfiles: [{ name: 'Filament', path: 'filament/path', category: 'filament' }],

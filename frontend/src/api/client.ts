@@ -573,7 +573,13 @@ class ApiClient {
   }
 
   async getJobOutputs(jobId: string): Promise<OutputFileSummary[]> {
-    return this.request<OutputFileSummary[]>(`/api/jobs/${jobId}/outputs`);
+    // GET /api/jobs/{id}/outputs responds with
+    // { job_id, status, output_files: [...] }, not a bare array — see
+    // backend/app/routers/jobs.py.
+    const response = await this.request<{ output_files: OutputFileSummary[] }>(
+      `/api/jobs/${jobId}/outputs`
+    );
+    return response.output_files;
   }
 
   async downloadOutput(jobId: string, filename: string): Promise<Blob> {

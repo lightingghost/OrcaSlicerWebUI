@@ -116,20 +116,23 @@ class TestBuildCliArgsBasic:
         output_dir = config.workspace_root / "jobs" / "job456" / "output"
         output_dir.mkdir(parents=True)
         
-        # Create a mock uploaded file
-        file_id = "file123.stl"
-        (session_dir / file_id).touch()
+        # Create a mock uploaded file (real uploads live under uploads/, not
+        # session_dir directly — see files.py's storage_path convention)
+        file_id = "file123"
+        stored_path = session_dir / "uploads" / f"{file_id}.stl"
+        stored_path.parent.mkdir(parents=True, exist_ok=True)
+        stored_path.touch()
         
         job = {
             "file_ids": [file_id],
             "action": "slice",
         }
         
-        args = build_cli_args(job, config, session_dir, output_dir)
+        args = build_cli_args(job, config, {file_id: stored_path}, output_dir)
         
         # Should contain: CLI path, input file, action, outputdir
         assert args[0] == str(config.orca_cli_path)
-        assert str(session_dir / file_id) in args
+        assert str(stored_path) in args
         assert "--slice" in args
         assert "0" in args  # default plate number
         assert "--outputdir" in args
@@ -144,20 +147,25 @@ class TestBuildCliArgsBasic:
         output_dir.mkdir(parents=True)
         
         # Create multiple files
-        file_ids = ["file1.stl", "file2.stl", "file3.obj"]
-        for fid in file_ids:
-            (session_dir / fid).touch()
+        file_ids = ["file1", "file2", "file3"]
+        extensions = ["stl", "stl", "obj"]
+        file_paths = {}
+        for fid, ext in zip(file_ids, extensions):
+            stored_path = session_dir / "uploads" / f"{fid}.{ext}"
+            stored_path.parent.mkdir(parents=True, exist_ok=True)
+            stored_path.touch()
+            file_paths[fid] = stored_path
         
         job = {
             "file_ids": file_ids,
             "action": "export_3mf",
         }
         
-        args = build_cli_args(job, config, session_dir, output_dir)
+        args = build_cli_args(job, config, file_paths, output_dir)
         
         # All files should be in args
         for fid in file_ids:
-            assert str(session_dir / fid) in args
+            assert str(file_paths[fid]) in args
 
 
 class TestBuildCliArgsActions:
@@ -177,7 +185,7 @@ class TestBuildCliArgsActions:
             "plate_number": 3,
         }
         
-        args = build_cli_args(job, config, session_dir, output_dir)
+        args = build_cli_args(job, config, {}, output_dir)
         
         assert "--slice" in args
         slice_idx = args.index("--slice")
@@ -196,8 +204,8 @@ class TestBuildCliArgsActions:
             "action": "export_3mf",
         }
         
-        args = build_cli_args(job, config, session_dir, output_dir)
-        assert "--export_3mf" in args
+        args = build_cli_args(job, config, {}, output_dir)
+        assert "--export-3mf" in args
 
     def test_export_settings_action(self, tmp_path):
         """Export settings action should use correct flag."""
@@ -212,8 +220,8 @@ class TestBuildCliArgsActions:
             "action": "export_settings",
         }
         
-        args = build_cli_args(job, config, session_dir, output_dir)
-        assert "--export_settings" in args
+        args = build_cli_args(job, config, {}, output_dir)
+        assert "--export-settings" in args
 
 
 class TestBuildCliArgsProfiles:
@@ -238,14 +246,17 @@ class TestBuildCliArgsProfiles:
             "printer_profile_path": "manufacturer/printer.json",
         }
         
-        args = build_cli_args(job, config, session_dir, output_dir)
+        args = build_cli_args(job, config, {}, output_dir)
         
-        assert "--load_settings" in args
-        settings_idx = args.index("--load_settings")
+        # The real OrcaSlicer CLI takes ONE --load-settings flag with a
+        # semicolon-separated file list (`--load-settings
+        # "setting1.json;setting2.json"`), not repeated flags.
+        assert "--load-settings" in args
+        settings_idx = args.index("--load-settings")
         assert args[settings_idx + 1] == str(printer_profile)
 
     def test_process_profile(self, tmp_path):
-        """Process profile should appear with --load_settings."""
+        """Process profile should appear with --load-settings."""
         config = MockConfig(tmp_path)
         session_dir = config.workspace_root / "sessions" / "s1"
         session_dir.mkdir(parents=True)
@@ -263,14 +274,16 @@ class TestBuildCliArgsProfiles:
             "process_profile_path": "manufacturer/process.json",
         }
         
-        args = build_cli_args(job, config, session_dir, output_dir)
+        args = build_cli_args(job, config, {}, output_dir)
         
-        assert "--load_settings" in args
+        assert "--load-settings" in args
         # Should have process profile path
-        assert str(process_profile) in args
+        settings_idx = args.index("--load-settings")
+        assert str(process_profile) in args[settings_idx + 1]
 
     def test_multiple_filament_profiles(self, tmp_path):
-        """Multiple filament profiles should each appear with --load_filaments."""
+        """Multiple filament profiles should appear as ONE --load-filaments
+        flag with a semicolon-separated file list."""
         config = MockConfig(tmp_path)
         session_dir = config.workspace_root / "sessions" / "s1"
         session_dir.mkdir(parents=True)
@@ -290,11 +303,17 @@ class TestBuildCliArgsProfiles:
             "filament_profile_paths": [f"manufacturer/{f}" for f in filaments],
         }
         
-        args = build_cli_args(job, config, session_dir, output_dir)
+        args = build_cli_args(job, config, {}, output_dir)
         
-        # Should have --load_filaments for each filament
-        filament_count = args.count("--load_filaments")
-        assert filament_count == 2
+        # Should have exactly ONE --load-filaments flag, with both paths
+        # semicolon-joined in its value.
+        filament_count = args.count("--load-filaments")
+        assert filament_count == 1
+        filaments_idx = args.index("--load-filaments")
+        value = args[filaments_idx + 1]
+        assert value.count(";") == 1
+        for fname in filaments:
+            assert fname in value
 
     def test_profile_path_traversal_rejected(self, tmp_path):
         """Profile paths with traversal attempts should be rejected."""
@@ -311,14 +330,18 @@ class TestBuildCliArgsProfiles:
         }
         
         with pytest.raises(ValueError, match="Path traversal detected"):
-            build_cli_args(job, config, session_dir, output_dir)
+            build_cli_args(job, config, {}, output_dir)
 
 
 class TestBuildCliArgsParameterOverrides:
     """Test parameter override handling."""
 
     def test_parameter_overrides_format(self, tmp_path):
-        """Parameter overrides should appear as --key=value."""
+        """Parameter overrides should appear as --key-with-dashes=value —
+        OrcaSlicer's CLI (`ConfigOptionDef::cli_args`,
+        libslic3r/Config.cpp:238-254) derives every option's CLI flag name
+        from its key with underscores replaced by dashes; passing the raw
+        underscored key is rejected outright as an unrecognized option."""
         config = MockConfig(tmp_path)
         session_dir = config.workspace_root / "sessions" / "s1"
         session_dir.mkdir(parents=True)
@@ -335,11 +358,15 @@ class TestBuildCliArgsParameterOverrides:
             }
         }
         
-        args = build_cli_args(job, config, session_dir, output_dir)
+        args = build_cli_args(job, config, {}, output_dir)
         
-        assert "--layer_height=0.2" in args
-        assert "--infill_density=20" in args
-        assert "--support_enable=true" in args
+        assert "--layer-height=0.2" in args
+        assert "--infill-density=20" in args
+        assert "--support-enable=true" in args
+        # The old (buggy) underscored form must never appear.
+        assert "--layer_height=0.2" not in args
+        assert "--infill_density=20" not in args
+        assert "--support_enable=true" not in args
 
     def test_numeric_parameter_values(self, tmp_path):
         """Numeric parameter values should be properly formatted."""
@@ -359,11 +386,38 @@ class TestBuildCliArgsParameterOverrides:
             }
         }
         
-        args = build_cli_args(job, config, session_dir, output_dir)
+        args = build_cli_args(job, config, {}, output_dir)
         
         assert "--temperature=220" in args
         assert "--speed=50.5" in args
         assert "--enabled=True" in args
+
+    def test_multi_word_key_dash_conversion_regression(self, tmp_path):
+        """Regression test for the bed-temperature bug: a multi-underscore
+        key like curr_bed_type must become --curr-bed-type=..., not
+        --curr_bed_type=... (which OrcaSlicer's CLI parser rejects with
+        "Invalid option", silently failing the whole job and making the
+        override have no effect at all — e.g. selecting "Textured Cool
+        Plate" in the UI never actually changed the sliced bed
+        temperature, since curr_bed_type never reached the CLI)."""
+        config = MockConfig(tmp_path)
+        session_dir = config.workspace_root / "sessions" / "s1"
+        session_dir.mkdir(parents=True)
+        output_dir = config.workspace_root / "jobs" / "j1" / "output"
+        output_dir.mkdir(parents=True)
+
+        job = {
+            "file_ids": [],
+            "action": "slice",
+            "parameter_overrides": {
+                "curr_bed_type": "Textured Cool Plate",
+            },
+        }
+
+        args = build_cli_args(job, config, {}, output_dir)
+
+        assert "--curr-bed-type=Textured Cool Plate" in args
+        assert not any(a.startswith("--curr_bed_type") for a in args)
 
 
 class TestBuildCliArgsTransforms:
@@ -388,11 +442,11 @@ class TestBuildCliArgsTransforms:
             }
         }
         
-        args = build_cli_args(job, config, session_dir, output_dir)
+        args = build_cli_args(job, config, {}, output_dir)
         
         assert "--rotate=45" in args
-        assert "--rotate_x=90" in args
-        assert "--rotate_y=180" in args
+        assert "--rotate-x=90" in args
+        assert "--rotate-y=180" in args
         assert "--scale=1.5" in args
 
     def test_boolean_transforms(self, tmp_path):
@@ -413,11 +467,11 @@ class TestBuildCliArgsTransforms:
             }
         }
         
-        args = build_cli_args(job, config, session_dir, output_dir)
+        args = build_cli_args(job, config, {}, output_dir)
         
-        assert "--ensure_on_bed" in args
+        assert "--ensure-on-bed" in args
         assert "--assemble" in args
-        assert "--convert_unit" not in args  # False should not appear
+        assert "--convert-unit" not in args  # False should not appear
 
     def test_arrange_with_suboptions(self, tmp_path):
         """Arrange=1 or 2 should enable sub-options."""
@@ -437,11 +491,11 @@ class TestBuildCliArgsTransforms:
             }
         }
         
-        args = build_cli_args(job, config, session_dir, output_dir)
+        args = build_cli_args(job, config, {}, output_dir)
         
         assert "--arrange=2" in args
-        assert "--allow_rotations" in args
-        assert "--allow_multicolor_oneplate" in args
+        assert "--allow-rotations" in args
+        assert "--allow-multicolor-oneplate" in args
 
     def test_arrange_zero_no_suboptions(self, tmp_path):
         """Arrange=0 should not enable sub-options even if they're set."""
@@ -460,10 +514,10 @@ class TestBuildCliArgsTransforms:
             }
         }
         
-        args = build_cli_args(job, config, session_dir, output_dir)
+        args = build_cli_args(job, config, {}, output_dir)
         
         assert "--arrange=0" in args
-        assert "--allow_rotations" not in args
+        assert "--allow-rotations" not in args
 
 
 class TestBuildCliArgsTransformsPropertyBased:
@@ -543,24 +597,29 @@ class TestBuildCliArgsTransformsPropertyBased:
                 "transforms": transforms,
             }
             
-            args = build_cli_args(job, config, session_dir, output_dir)
+            args = build_cli_args(job, config, {}, output_dir)
             args_str = " ".join(args)  # For easier searching
             
-            # Verify numeric/enum transforms with values
-            if rotate is not None:
+            # Verify numeric/enum transforms with values. --rotate/--rotate-x/
+            # --rotate-y are deliberately skipped when their value is exactly
+            # 0 (see cli_builder.py's ZERO_SKIPPABLE_ROTATION_KEYS comment —
+            # this real OrcaSlicer CLI build segfaults on these flags
+            # regardless of value, so 0 — a no-op rotation anyway — is
+            # omitted to avoid the crash for the common default case).
+            if rotate is not None and rotate != 0:
                 assert f"--rotate={rotate}" in args, f"Expected --rotate={rotate} in args"
             else:
-                assert "--rotate=" not in args_str, "rotate should not appear when None"
+                assert "--rotate=" not in args_str, "rotate should not appear when None or 0"
             
-            if rotate_x is not None:
-                assert f"--rotate_x={rotate_x}" in args, f"Expected --rotate_x={rotate_x} in args"
+            if rotate_x is not None and rotate_x != 0:
+                assert f"--rotate-x={rotate_x}" in args, f"Expected --rotate-x={rotate_x} in args"
             else:
-                assert "--rotate_x=" not in args_str, "rotate_x should not appear when None"
+                assert "--rotate-x=" not in args_str, "rotate_x should not appear when None or 0"
             
-            if rotate_y is not None:
-                assert f"--rotate_y={rotate_y}" in args, f"Expected --rotate_y={rotate_y} in args"
+            if rotate_y is not None and rotate_y != 0:
+                assert f"--rotate-y={rotate_y}" in args, f"Expected --rotate-y={rotate_y} in args"
             else:
-                assert "--rotate_y=" not in args_str, "rotate_y should not appear when None"
+                assert "--rotate-y=" not in args_str, "rotate_y should not appear when None or 0"
             
             if scale is not None:
                 assert f"--scale={scale}" in args, f"Expected --scale={scale} in args"
@@ -584,9 +643,9 @@ class TestBuildCliArgsTransformsPropertyBased:
             
             # Verify boolean transforms (flag present if and only if True)
             if ensure_on_bed:
-                assert "--ensure_on_bed" in args, "ensure_on_bed flag should be present when True"
+                assert "--ensure-on-bed" in args, "ensure_on_bed flag should be present when True"
             else:
-                assert "--ensure_on_bed" not in args, "ensure_on_bed flag should not be present when False"
+                assert "--ensure-on-bed" not in args, "ensure_on_bed flag should not be present when False"
             
             if assemble:
                 assert "--assemble" in args, "assemble flag should be present when True"
@@ -594,31 +653,31 @@ class TestBuildCliArgsTransformsPropertyBased:
                 assert "--assemble" not in args, "assemble flag should not be present when False"
             
             if convert_unit:
-                assert "--convert_unit" in args, "convert_unit flag should be present when True"
+                assert "--convert-unit" in args, "convert_unit flag should be present when True"
             else:
-                assert "--convert_unit" not in args, "convert_unit flag should not be present when False"
+                assert "--convert-unit" not in args, "convert_unit flag should not be present when False"
             
             # Verify arrange sub-options (only appear when arrange is 1 or 2)
             if arrange in (1, 2):
                 if allow_rotations:
-                    assert "--allow_rotations" in args, "allow_rotations should be present when arrange=1/2 and True"
+                    assert "--allow-rotations" in args, "allow_rotations should be present when arrange=1/2 and True"
                 else:
-                    assert "--allow_rotations" not in args, "allow_rotations should not be present when False"
+                    assert "--allow-rotations" not in args, "allow_rotations should not be present when False"
                 
                 if allow_multicolor_oneplate:
-                    assert "--allow_multicolor_oneplate" in args, "allow_multicolor_oneplate should be present when arrange=1/2 and True"
+                    assert "--allow-multicolor-oneplate" in args, "allow_multicolor_oneplate should be present when arrange=1/2 and True"
                 else:
-                    assert "--allow_multicolor_oneplate" not in args, "allow_multicolor_oneplate should not be present when False"
+                    assert "--allow-multicolor-oneplate" not in args, "allow_multicolor_oneplate should not be present when False"
                 
                 if avoid_extrusion_cali_region:
-                    assert "--avoid_extrusion_cali_region" in args, "avoid_extrusion_cali_region should be present when arrange=1/2 and True"
+                    assert "--avoid-extrusion-cali-region" in args, "avoid_extrusion_cali_region should be present when arrange=1/2 and True"
                 else:
-                    assert "--avoid_extrusion_cali_region" not in args, "avoid_extrusion_cali_region should not be present when False"
+                    assert "--avoid-extrusion-cali-region" not in args, "avoid_extrusion_cali_region should not be present when False"
             else:
                 # When arrange is 0 or None, sub-options should not appear even if True
-                assert "--allow_rotations" not in args, "allow_rotations should not appear when arrange != 1/2"
-                assert "--allow_multicolor_oneplate" not in args, "allow_multicolor_oneplate should not appear when arrange != 1/2"
-                assert "--avoid_extrusion_cali_region" not in args, "avoid_extrusion_cali_region should not appear when arrange != 1/2"
+                assert "--allow-rotations" not in args, "allow_rotations should not appear when arrange != 1/2"
+                assert "--allow-multicolor-oneplate" not in args, "allow_multicolor_oneplate should not appear when arrange != 1/2"
+                assert "--avoid-extrusion-cali-region" not in args, "avoid_extrusion_cali_region should not appear when arrange != 1/2"
 
 
 class TestBuildCliArgsMisc:
@@ -640,7 +699,7 @@ class TestBuildCliArgsMisc:
             }
         }
         
-        args = build_cli_args(job, config, session_dir, output_dir)
+        args = build_cli_args(job, config, {}, output_dir)
         
         assert "--datadir" in args
         datadir_idx = args.index("--datadir")
@@ -662,7 +721,7 @@ class TestBuildCliArgsMisc:
             }
         }
         
-        args = build_cli_args(job, config, session_dir, output_dir)
+        args = build_cli_args(job, config, {}, output_dir)
         
         assert "--debug" in args
         debug_idx = args.index("--debug")
@@ -677,20 +736,21 @@ class TestBuildCliArgsMisc:
         output_dir.mkdir(parents=True)
         
         # Create custom gcode file
-        gcode_file = session_dir / "custom_gcode.json"
+        gcode_file = session_dir / "uploads" / "custom_gcode_id.json"
+        gcode_file.parent.mkdir(parents=True, exist_ok=True)
         gcode_file.touch()
         
         job = {
             "file_ids": [],
             "action": "slice",
             "misc": {
-                "load_custom_gcodes_file_id": "custom_gcode.json",
+                "load_custom_gcodes_file_id": "custom_gcode_id",
             }
         }
         
-        args = build_cli_args(job, config, session_dir, output_dir)
+        args = build_cli_args(job, config, {"custom_gcode_id": gcode_file}, output_dir)
         
-        assert "--load_custom_gcodes" in args
+        assert "--load-custom-gcodes" in args
         assert str(gcode_file) in args
 
     def test_integer_list_options(self, tmp_path):
@@ -711,18 +771,18 @@ class TestBuildCliArgsMisc:
             }
         }
         
-        args = build_cli_args(job, config, session_dir, output_dir)
+        args = build_cli_args(job, config, {}, output_dir)
         
-        assert "--load_filament_ids" in args
-        fid_idx = args.index("--load_filament_ids")
+        assert "--load-filament-ids" in args
+        fid_idx = args.index("--load-filament-ids")
         assert args[fid_idx + 1] == "1,2,3"
         
-        assert "--skip_objects" in args
-        skip_idx = args.index("--skip_objects")
+        assert "--skip-objects" in args
+        skip_idx = args.index("--skip-objects")
         assert args[skip_idx + 1] == "5,10"
         
-        assert "--clone_objects" in args
-        clone_idx = args.index("--clone_objects")
+        assert "--clone-objects" in args
+        clone_idx = args.index("--clone-objects")
         assert args[clone_idx + 1] == "7"
 
     def test_boolean_misc_options(self, tmp_path):
@@ -743,11 +803,11 @@ class TestBuildCliArgsMisc:
             }
         }
         
-        args = build_cli_args(job, config, session_dir, output_dir)
+        args = build_cli_args(job, config, {}, output_dir)
         
-        assert "--allow_newer_file" in args
-        assert "--skip_modified_gcodes" in args
-        assert "--downward_check" not in args  # False should not appear
+        assert "--allow-newer-file" in args
+        assert "--skip-modified-gcodes" in args
+        assert "--downward-check" not in args  # False should not appear
 
 
 class TestBuildCliArgsActionFlags:
@@ -771,10 +831,10 @@ class TestBuildCliArgsActionFlags:
             }
         }
         
-        args = build_cli_args(job, config, session_dir, output_dir)
+        args = build_cli_args(job, config, {}, output_dir)
         
-        assert "--min_save" in args
-        assert "--normative_check" in args
+        assert "--min-save" in args
+        assert "--normative-check" in args
         assert "--uptodate" not in args
 
 
@@ -796,8 +856,8 @@ class TestBuildCliArgsActionsPropertyBased:
         Property 9: Exactly one action flag per CLI invocation.
         
         For any valid job request, the constructed CLI args list shall contain 
-        exactly one string from the set {"--slice", "--export_3mf", "--export_stl", 
-        "--export_stls", "--export_settings"}.
+        exactly one string from the set {"--slice", "--export-3mf", "--export-stl", 
+        "--export-stls", "--export-settings"}.
         
         This test generates jobs with various combinations of optional parameters
         to ensure that regardless of what else is in the job, exactly one action
@@ -848,15 +908,16 @@ class TestBuildCliArgsActionsPropertyBased:
                 }
             
             # Build CLI args
-            args = build_cli_args(job, config, session_dir, output_dir)
+            args = build_cli_args(job, config, {}, output_dir)
             
-            # Define all possible action flags
+            # Define all possible action flags (hyphenated — matching the
+            # real OrcaSlicer CLI's `--export-3mf`/`--export-stl`/etc.)
             ACTION_FLAGS = {
                 "--slice",
-                "--export_3mf",
-                "--export_stl",
-                "--export_stls",
-                "--export_settings"
+                "--export-3mf",
+                "--export-stl",
+                "--export-stls",
+                "--export-settings"
             }
             
             # Count how many action flags appear in the args
@@ -869,7 +930,7 @@ class TestBuildCliArgsActionsPropertyBased:
             )
             
             # Assert the correct action flag for the requested action
-            expected_flag = f"--{action}"
+            expected_flag = f"--{action.replace('_', '-')}"
             assert expected_flag in args, (
                 f"Expected action flag {expected_flag} for action {action!r} to be in args, "
                 f"but it was not found. Args: {args}"
@@ -888,8 +949,10 @@ class TestBuildCliArgsComplexScenarios:
         output_dir.mkdir(parents=True)
         
         # Create files
-        file_id = "model.stl"
-        (session_dir / file_id).touch()
+        file_id = "model"
+        stored_path = session_dir / "uploads" / f"{file_id}.stl"
+        stored_path.parent.mkdir(parents=True, exist_ok=True)
+        stored_path.touch()
         
         printer_profile = config.profiles_root / "bambu" / "x1c.json"
         printer_profile.parent.mkdir(parents=True)
@@ -912,7 +975,7 @@ class TestBuildCliArgsComplexScenarios:
             },
         }
         
-        args = build_cli_args(job, config, session_dir, output_dir)
+        args = build_cli_args(job, config, {file_id: stored_path}, output_dir)
         
         # Verify it's a list of strings (no shell required)
         assert isinstance(args, list)
@@ -921,9 +984,9 @@ class TestBuildCliArgsComplexScenarios:
         # Verify key components present
         assert args[0] == str(config.orca_cli_path)
         assert "--slice" in args
-        assert "--load_settings" in args
+        assert "--load-settings" in args
         assert "--outputdir" in args
-        assert "--layer_height=0.2" in args
+        assert "--layer-height=0.2" in args
         assert "--rotate=90" in args
         assert "--debug" in args
 
@@ -944,10 +1007,10 @@ class TestBuildCliArgsComplexScenarios:
             },
         }
         
-        args = build_cli_args(job, config, session_dir, output_dir)
+        args = build_cli_args(job, config, {}, output_dir)
         
         # The metacharacters should be in a single argument, not parsed
-        assert "--custom_gcode=; echo 'test' && rm -rf /" in args
+        assert "--custom-gcode=; echo 'test' && rm -rf /" in args
         
         # Verify args is still a proper list
         assert isinstance(args, list)
@@ -969,7 +1032,7 @@ class TestBuildCliArgsComplexScenarios:
             "action_flags": {},
         }
         
-        args = build_cli_args(job, config, session_dir, output_dir)
+        args = build_cli_args(job, config, {}, output_dir)
         
         # Should only have: cli_path, action, outputdir
         assert args[0] == str(config.orca_cli_path)
@@ -1087,63 +1150,48 @@ class TestProfileFlagsPropertyTests:
         }
         
         # Build CLI args
-        args = build_cli_args(job, config, session_dir, output_dir)
+        args = build_cli_args(job, config, {}, output_dir)
         
         # Verify structure
         assert isinstance(args, list), "CLI args should be a list"
         assert all(isinstance(arg, str) for arg in args), "All args should be strings"
         
-        # Count --load_settings flags
-        load_settings_count = args.count("--load_settings")
-        assert load_settings_count == 2, (
-            f"Expected exactly 2 --load_settings flags (printer + process), "
+        # The real OrcaSlicer CLI takes ONE --load-settings flag with a
+        # semicolon-separated file list (printer;process), and ONE
+        # --load-filaments flag with a semicolon-separated filament list —
+        # not repeated flags per file (see cli_builder.py's comment on
+        # `--load-settings "setting1.json;setting2.json"`).
+        load_settings_count = args.count("--load-settings")
+        assert load_settings_count == 1, (
+            f"Expected exactly 1 --load-settings flag (printer;process joined), "
             f"but found {load_settings_count}"
         )
         
-        # Count --load_filaments flags
-        load_filaments_count = args.count("--load_filaments")
-        assert load_filaments_count == num_filaments, (
-            f"Expected {num_filaments} --load_filaments flags, "
+        load_filaments_count = args.count("--load-filaments")
+        assert load_filaments_count == 1, (
+            f"Expected exactly 1 --load-filaments flag ({num_filaments} filaments joined), "
             f"but found {load_filaments_count}"
         )
         
-        # Verify printer profile path appears after first --load_settings
-        first_load_settings_idx = args.index("--load_settings")
-        assert first_load_settings_idx + 1 < len(args), (
-            "Expected path after first --load_settings"
-        )
-        first_settings_path = args[first_load_settings_idx + 1]
-        assert str(printer_profile) == first_settings_path, (
-            f"Expected printer profile path {printer_profile} after first --load_settings, "
-            f"but found {first_settings_path}"
+        # Verify the --load-settings value is "printer;process" in that order.
+        load_settings_idx = args.index("--load-settings")
+        assert load_settings_idx + 1 < len(args), "Expected value after --load-settings"
+        load_settings_value = args[load_settings_idx + 1]
+        assert load_settings_value == f"{printer_profile};{process_profile}", (
+            f"Expected --load-settings value '{printer_profile};{process_profile}', "
+            f"but found {load_settings_value!r}"
         )
         
-        # Verify process profile path appears after second --load_settings
-        second_load_settings_idx = args.index("--load_settings", first_load_settings_idx + 1)
-        assert second_load_settings_idx + 1 < len(args), (
-            "Expected path after second --load_settings"
+        # Verify the --load-filaments value contains every filament path,
+        # semicolon-joined in order.
+        load_filaments_idx = args.index("--load-filaments")
+        assert load_filaments_idx + 1 < len(args), "Expected value after --load-filaments"
+        load_filaments_value = args[load_filaments_idx + 1]
+        expected_filaments_value = ";".join(str(p) for p in filament_profiles)
+        assert load_filaments_value == expected_filaments_value, (
+            f"Expected --load-filaments value {expected_filaments_value!r}, "
+            f"but found {load_filaments_value!r}"
         )
-        second_settings_path = args[second_load_settings_idx + 1]
-        assert str(process_profile) == second_settings_path, (
-            f"Expected process profile path {process_profile} after second --load_settings, "
-            f"but found {second_settings_path}"
-        )
-        
-        # Verify each filament profile path appears after its --load_filaments
-        for i, expected_filament_path in enumerate(filament_profiles):
-            # Find the i-th occurrence of --load_filaments
-            filaments_idx = args.index("--load_filaments")
-            for _ in range(i):
-                filaments_idx = args.index("--load_filaments", filaments_idx + 1)
-            
-            assert filaments_idx + 1 < len(args), (
-                f"Expected path after --load_filaments at index {filaments_idx}"
-            )
-            filament_path_in_args = args[filaments_idx + 1]
-            assert str(expected_filament_path) == filament_path_in_args, (
-                f"Expected filament profile path {expected_filament_path} "
-                f"after --load_filaments, but found {filament_path_in_args}"
-            )
         
         # Verify paths are absolute and within profiles_root
         for profile_path in [printer_profile, process_profile] + filament_profiles:
@@ -1225,11 +1273,14 @@ class TestParameterOverridePropertyTests:
                 "parameter_overrides": overrides,
             }
             
-            args = build_cli_args(job, config, session_dir, output_dir)
+            args = build_cli_args(job, config, {}, output_dir)
             
-            # Verify each override appears as --key=value
+            # Verify each override appears as --key-with-dashes=value (CLI
+            # flag names always replace underscores with dashes — see
+            # ConfigOptionDef::cli_args, libslic3r/Config.cpp:238-254).
             for key, value in overrides.items():
-                expected_arg = f"--{key}={value}"
+                cli_flag = key.replace("_", "-")
+                expected_arg = f"--{cli_flag}={value}"
                 assert expected_arg in args, (
                     f"Expected {expected_arg!r} in CLI args for override {key}={value!r}"
                 )
@@ -1238,8 +1289,9 @@ class TestParameterOverridePropertyTests:
             # Get all keys that appear in args with the pattern --<key>=
             args_str = " ".join(args)
             for key in overrides.keys():
+                cli_flag = key.replace("_", "-")
                 # Count occurrences - should be exactly 1
-                count = args_str.count(f"--{key}=")
+                count = args_str.count(f"--{cli_flag}=")
                 assert count == 1, (
                     f"Parameter {key} should appear exactly once, found {count} times"
                 )
@@ -1255,7 +1307,8 @@ class TestParameterOverridePropertyTests:
             keys_not_in_overrides = all_possible_keys - set(overrides.keys())
             
             for key in keys_not_in_overrides:
-                assert f"--{key}=" not in args_str, (
+                cli_flag = key.replace("_", "-")
+                assert f"--{cli_flag}=" not in args_str, (
                     f"Parameter {key} should not appear in CLI args when not in overrides"
                 )
 
@@ -1316,15 +1369,16 @@ class TestParameterOverridePropertyTests:
                 "parameter_overrides": overrides,
             }
             
-            args = build_cli_args(job, config, session_dir, output_dir)
+            args = build_cli_args(job, config, {}, output_dir)
             args_str = " ".join(args)
             
             # Count how many parameter override flags appear
-            # Parameter overrides look like --<key>=<value>
+            # Parameter overrides look like --<key-with-dashes>=<value>
             # We check that the count matches the number of overrides
             parameter_flag_count = 0
             for key in overrides.keys():
-                if f"--{key}=" in args_str:
+                cli_flag = key.replace("_", "-")
+                if f"--{cli_flag}=" in args_str:
                     parameter_flag_count += 1
             
             assert parameter_flag_count == len(overrides), (
@@ -1370,10 +1424,11 @@ class TestParameterOverridePropertyTests:
                 "parameter_overrides": {param_key: param_value},
             }
             
-            args = build_cli_args(job, config, session_dir, output_dir)
+            args = build_cli_args(job, config, {}, output_dir)
             
-            # Check the exact format
-            expected_arg = f"--{param_key}={param_value}"
+            # Check the exact format (CLI flag uses dashes, not underscores)
+            cli_flag = param_key.replace("_", "-")
+            expected_arg = f"--{cli_flag}={param_value}"
             assert expected_arg in args, (
                 f"Expected exact argument {expected_arg!r} in CLI args"
             )
@@ -2167,7 +2222,7 @@ class TestParameterKeyAllowlistPropertyTests:
         # (showing why validation is critical)
         if not validation_failed:
             # This branch should never execute in correct implementation
-            args = build_cli_args(job, config, session_dir, output_dir)
+            args = build_cli_args(job, config, {}, output_dir)
             pytest.fail(
                 f"Parameter key {unknown_key!r} was not in allowlist but would have "
                 f"been passed to CLI: {args}"
@@ -2410,11 +2465,13 @@ class TestParameterKeyAllowlistPropertyTests:
                 )
         else:
             # All keys are valid - job could proceed
-            args = build_cli_args(job, config, session_dir, output_dir)
+            args = build_cli_args(job, config, {}, output_dir)
             
-            # Verify all parameters appear in CLI args
+            # Verify all parameters appear in CLI args (as dashed flags —
+            # see ConfigOptionDef::cli_args, libslic3r/Config.cpp:238-254)
             for key in keys:
-                assert any(f"--{key}=" in arg for arg in args), (
+                cli_flag = key.replace("_", "-")
+                assert any(f"--{cli_flag}=" in arg for arg in args), (
                     f"Valid parameter {key} should appear in CLI args"
                 )
 
@@ -2850,7 +2907,7 @@ class TestShellInjectionPropertyTests:
             }
         }
         
-        args = build_cli_args(job, config, session_dir, output_dir)
+        args = build_cli_args(job, config, {}, output_dir)
         
         # Verify args is a list, not a string
         assert isinstance(args, list), "CLI args must be a list, not a string"
@@ -2858,8 +2915,10 @@ class TestShellInjectionPropertyTests:
         # Verify all elements are strings
         assert all(isinstance(arg, str) for arg in args), "All CLI args must be strings"
         
-        # The parameter should appear as a single argument in the form --key=value
-        expected_arg = f"--custom_parameter={param_value}"
+        # The parameter should appear as a single argument in the form
+        # --key-with-dashes=value (CLI flag names replace underscores with
+        # dashes — see ConfigOptionDef::cli_args, libslic3r/Config.cpp:238-254)
+        expected_arg = f"--custom-parameter={param_value}"
         assert expected_arg in args, (
             f"Expected {expected_arg!r} to be a single element in args. "
             f"Shell metacharacters should not split or alter the argument."
@@ -2944,7 +3003,7 @@ class TestShellInjectionPropertyTests:
         ]
         
         for job in jobs_to_test:
-            args = build_cli_args(job, config, session_dir, output_dir)
+            args = build_cli_args(job, config, {}, output_dir)
             
             # Verify args is a proper list
             assert isinstance(args, list), "CLI args must be a list"
@@ -3011,14 +3070,14 @@ class TestShellInjectionPropertyTests:
             }
         }
         
-        args = build_cli_args(job, config, session_dir, output_dir)
+        args = build_cli_args(job, config, {}, output_dir)
         
         # Verify proper list structure
         assert isinstance(args, list)
         assert all(isinstance(arg, str) for arg in args)
         
-        # The parameter should be in a single argument
-        expected = f"--test_param={malicious_value}"
+        # The parameter should be in a single argument (dashed flag name)
+        expected = f"--test-param={malicious_value}"
         assert expected in args, f"Expected {expected!r} as single argument"
         
         # Verify the metacharacters didn't cause argument splitting
@@ -3062,14 +3121,14 @@ class TestShellInjectionPropertyTests:
             }
         }
         
-        args = build_cli_args(job, config, session_dir, output_dir)
+        args = build_cli_args(job, config, {}, output_dir)
         
         # Verify list structure
         assert isinstance(args, list)
         assert all(isinstance(arg, str) for arg in args)
         
-        # The quoted value should be part of a single argument
-        expected = f"--quoted_param={quoted_value}"
+        # The quoted value should be part of a single argument (dashed flag name)
+        expected = f"--quoted-param={quoted_value}"
         assert expected in args, (
             f"Quote characters should not break argument boundaries. "
             f"Expected {expected!r} in args."
@@ -3107,7 +3166,9 @@ class TestShellInjectionPropertyTests:
         # Create a file with metacharacters in its name
         # Note: This is a contrived scenario; real system should sanitize filenames
         safe_filename = f"file_{file_content.replace('/', '_')}.stl"
-        file_path = session_dir / safe_filename
+        file_id = "meta_test_id"
+        file_path = session_dir / "uploads" / safe_filename
+        file_path.parent.mkdir(parents=True, exist_ok=True)
         
         try:
             file_path.touch()
@@ -3118,11 +3179,11 @@ class TestShellInjectionPropertyTests:
             return
         
         job = {
-            "file_ids": [safe_filename],
+            "file_ids": [file_id],
             "action": "slice",
         }
         
-        args = build_cli_args(job, config, session_dir, output_dir)
+        args = build_cli_args(job, config, {file_id: file_path}, output_dir)
         
         # Verify list structure
         assert isinstance(args, list)
@@ -3164,7 +3225,7 @@ class TestShellInjectionPropertyTests:
             }
         }
         
-        args = build_cli_args(job, config, session_dir, output_dir)
+        args = build_cli_args(job, config, {}, output_dir)
         
         # Key assertion: args is a list of strings
         assert isinstance(args, list)
@@ -3422,7 +3483,7 @@ class TestUniqueOutputDirectoriesPropertyTests:
                 "action": "slice",
             }
             
-            args = build_cli_args(job, config, session_dir, output_dir)
+            args = build_cli_args(job, config, {}, output_dir)
             
             # Extract output path
             outputdir_idx = args.index("--outputdir")
