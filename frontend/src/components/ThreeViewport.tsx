@@ -375,7 +375,26 @@ export const ThreeViewport: React.FC = () => {
     // frame, and a toBlob() call made any time after that (e.g. from the
     // job-completion handler, potentially frames later) can capture a
     // blank/garbage canvas instead of the model.
-    const renderer = new THREE.WebGLRenderer({ antialias: true, preserveDrawingBuffer: true });
+    //
+    // Wrapped in try/catch: browsers cap the total number of simultaneous
+    // WebGL contexts per page (commonly 8-16), and a long dev session with
+    // repeated Vite HMR teardown/recreation of this component (or simply
+    // many contexts already open from other tabs/apps) can exhaust that
+    // limit, making `new THREE.WebGLRenderer(...)` throw. Previously this
+    // was uncaught and crashed the ENTIRE app via React Router's default
+    // error boundary (no errorElement is configured) instead of just this
+    // one viewport failing to render — bail out to a plain error message
+    // in the container instead.
+    let renderer: THREE.WebGLRenderer;
+    try {
+      renderer = new THREE.WebGLRenderer({ antialias: true, preserveDrawingBuffer: true });
+    } catch (error) {
+      console.error('[ThreeViewport] Failed to create WebGL context:', error);
+      container.textContent =
+        'Unable to initialize 3D view (WebGL context creation failed). Try closing other tabs/apps using the GPU, or reloading the page.';
+      container.className = 'w-full h-full flex items-center justify-center text-center text-sm text-gray-400 p-8';
+      return;
+    }
     renderer.setSize(width, height);
     renderer.setPixelRatio(window.devicePixelRatio);
     container.appendChild(renderer.domElement);
@@ -690,21 +709,30 @@ export const ThreeViewport: React.FC = () => {
       gizmoCamera.lookAt(0, 0, 0);
       gizmoCameraRef.current = gizmoCamera;
 
-      const gizmoRenderer = new THREE.WebGLRenderer({
-        canvas: gizmoCanvas,
-        alpha: true, // Transparent background
-        antialias: true,
-      });
-      gizmoRenderer.setSize(GIZMO_SIZE, GIZMO_SIZE);
-      gizmoRenderer.setPixelRatio(window.devicePixelRatio);
-      gizmoRendererRef.current = gizmoRenderer;
+      // The view-cube gizmo is a secondary navigation aid, not the main
+      // viewport — if the page is already near the browser's WebGL
+      // context limit (see the main renderer's try/catch above for why
+      // that can happen), skip the gizmo rather than let its failure
+      // take down the whole viewport too.
+      try {
+        const gizmoRenderer = new THREE.WebGLRenderer({
+          canvas: gizmoCanvas,
+          alpha: true, // Transparent background
+          antialias: true,
+        });
+        gizmoRenderer.setSize(GIZMO_SIZE, GIZMO_SIZE);
+        gizmoRenderer.setPixelRatio(window.devicePixelRatio);
+        gizmoRendererRef.current = gizmoRenderer;
 
-      const cube = buildViewCube();
-      gizmoScene.add(cube.group);
-      gizmoCubeRef.current = cube;
+        const cube = buildViewCube();
+        gizmoScene.add(cube.group);
+        gizmoCubeRef.current = cube;
 
-      const gizmoLight = new THREE.AmbientLight(0xffffff, 1.2);
-      gizmoScene.add(gizmoLight);
+        const gizmoLight = new THREE.AmbientLight(0xffffff, 1.2);
+        gizmoScene.add(gizmoLight);
+      } catch (error) {
+        console.error('[ThreeViewport] Failed to create gizmo WebGL context (non-fatal):', error);
+      }
     }
 
     const getGizmoNdc = (event: { clientX: number; clientY: number }) => {

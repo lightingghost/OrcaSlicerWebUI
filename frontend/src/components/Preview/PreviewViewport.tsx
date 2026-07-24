@@ -72,7 +72,23 @@ export const PreviewViewport: React.FC = () => {
     camera.lookAt(0, 0, 0);
     cameraRef.current = camera;
 
-    const renderer = new THREE.WebGLRenderer({ antialias: true });
+    // Wrapped in try/catch: browsers cap the total number of simultaneous
+    // WebGL contexts per page. If that limit is already exhausted (e.g.
+    // ThreeViewport's own contexts, plus other tabs/apps using the GPU),
+    // `new THREE.WebGLRenderer(...)` throws — previously uncaught, which
+    // crashed the ENTIRE app via React Router's default error boundary
+    // (no errorElement configured) instead of failing gracefully within
+    // just this one viewport.
+    let renderer: THREE.WebGLRenderer;
+    try {
+      renderer = new THREE.WebGLRenderer({ antialias: true });
+    } catch (error) {
+      console.error('[PreviewViewport] Failed to create WebGL context:', error);
+      container.textContent =
+        'Unable to initialize 3D preview (WebGL context creation failed). Try closing other tabs/apps using the GPU, or reloading the page.';
+      container.className = 'w-full h-full flex items-center justify-center text-center text-sm text-gray-400 p-8';
+      return;
+    }
     renderer.setSize(width, height);
     renderer.setPixelRatio(window.devicePixelRatio);
     container.appendChild(renderer.domElement);

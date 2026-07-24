@@ -37,17 +37,29 @@ export const MainArea: React.FC = () => {
 
   return (
     <main className="flex-1 flex flex-col min-h-0 overflow-hidden">
-      {/* ViewportContainer (Prepare tab) and PreviewContainer (Preview
-          tab) are both kept mounted at all times and toggled via CSS
-          (display: none), rather than conditionally rendered. Object
-          positions (including manual drag placement) live only in the
-          Three.js scene's own mesh transforms, not in the Zustand store —
-          conditionally unmounting ThreeViewport on every tab switch would
-          tear down that scene, so coming back to Prepare would re-fetch
-          and reload each model from scratch, discarding wherever the user
-          had actually placed it and resetting to the loader's default
-          centered position. Keeping both mounted preserves viewport state
-          exactly like native OrcaSlicer's Prepare/Preview tabs do. */}
+      {/* ViewportContainer (Prepare tab) is kept permanently mounted and
+          toggled via CSS (display: none) rather than conditionally
+          rendered — object positions (including manual drag placement)
+          live only in the Three.js scene's own mesh transforms, not the
+          Zustand store, so unmounting ThreeViewport on every tab switch
+          would tear down that scene and force a re-fetch/reload of every
+          model from scratch on returning to Prepare.
+
+          PreviewContainer does NOT need this treatment: its toolpath is
+          rebuilt purely from store state (parsedGcode/currentLayerIndex/
+          currentStepIndex/hiddenRoles/bedSize/bedCenter — see
+          PreviewViewport.tsx), so it's conditionally mounted/unmounted
+          instead. This also keeps the page's total simultaneous WebGL
+          context count at 2 (ThreeViewport's main + gizmo-cube contexts)
+          rather than 3 — each extra always-on context is one more that
+          can tip a long dev session (repeated Vite HMR teardown/rebuild
+          of these components) over the browser's hard per-page WebGL
+          context limit, which previously surfaced as an uncaught
+          "Error creating WebGL context" crashing the whole app (no
+          errorElement is configured on the router, so any thrown render
+          error takes down the entire UI) — see also
+          ThreeViewport/PreviewViewport's own try/catch around renderer
+          creation, added as a second, independent line of defense. */}
       <div className="flex-1 min-h-0 relative overflow-hidden">
         {/* ViewportContainer's ViewportTransformToolbar overlay is
             absolutely positioned within ThreeViewport, not scoped to
@@ -61,9 +73,11 @@ export const MainArea: React.FC = () => {
         <div className={activeTab === 'prepare' ? 'w-full h-full' : 'hidden'}>
           <ViewportContainer />
         </div>
-        <div className={activeTab === 'preview' ? 'w-full h-full' : 'hidden'}>
-          <PreviewContainer />
-        </div>
+        {activeTab === 'preview' && (
+          <div className="w-full h-full">
+            <PreviewContainer />
+          </div>
+        )}
         {activeTab === 'device' && (
           <div className="absolute inset-0">
             <DevicePage />
