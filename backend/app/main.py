@@ -222,7 +222,16 @@ async def health_check():
 
 
 # Mount routers
-from app.routers import files, profiles, parameters, jobs, websockets, user_config, printer_config
+from app.routers import (
+    files,
+    profiles,
+    parameters,
+    jobs,
+    websockets,
+    user_config,
+    printer_config,
+    device_connection,
+)
 
 app.include_router(files.router, prefix="/api", tags=["files"])
 app.include_router(profiles.router, prefix="/api", tags=["profiles"])
@@ -230,6 +239,7 @@ app.include_router(parameters.router, prefix="/api", tags=["parameters"])
 app.include_router(jobs.router, prefix="/api", tags=["jobs"])
 app.include_router(user_config.router, prefix="/api", tags=["user_config"])
 app.include_router(printer_config.router, prefix="/api", tags=["printer_config"])
+app.include_router(device_connection.router, prefix="/api", tags=["device_connection"])
 app.include_router(websockets.router, tags=["websockets"])
 
 

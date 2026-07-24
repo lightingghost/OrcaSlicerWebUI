@@ -5,7 +5,10 @@
  * - TabNav: Main navigation tabs (Prepare | Preview | Device | Project | Calibration)
  * - Job Options button: opens the CLI-specific options modal
  * - SliceButton: Primary action button (triggers job submission with action='slice')
- * - ExportButton: Secondary action button
+ * - PrintButton: Secondary action button, disabled until the plate has
+ *   been sliced; opens the "Send G-code to printer host" dialog
+ *   (see PrintDialog.tsx), matching native OrcaSlicer's Send-to-print
+ *   flow instead of a plain file-export dropdown.
  * 
  * Move/Rotate/Scale/Arrange tools AND the "Add model" import button live
  * inside the 3D viewport itself (see ViewportTransformToolbar), not here —
@@ -17,14 +20,14 @@
 import React, { useState } from 'react';
 import {
   Play,
-  Download,
-  ChevronDown,
+  Printer,
   Settings2,
 } from 'lucide-react';
-import { useStore } from '../../store';
-import type { Action, MainTab } from '../../store';
+import { useStore, findGcodeOutput } from '../../store';
+import type { MainTab } from '../../store';
 import { JobOptionsModal } from '../JobPanel';
 import { OutputFilesDropdown } from './OutputFilesDropdown';
+import { PrintDialog } from '../Device/PrintDialog';
 
 interface TopBarProps {
   activeTab?: MainTab;
@@ -35,8 +38,8 @@ export const TopBar: React.FC<TopBarProps> = ({
   activeTab = 'prepare',
   onTabChange,
 }) => {
-  const [showExportMenu, setShowExportMenu] = useState(false);
   const [showJobOptions, setShowJobOptions] = useState(false);
+  const [showPrintDialog, setShowPrintDialog] = useState(false);
 
   // Store selectors
   const uploadedFiles = useStore((state) => state.uploadedFiles);
@@ -48,9 +51,10 @@ export const TopBar: React.FC<TopBarProps> = ({
   const misc = useStore((state) => state.misc);
   const actionFlags = useStore((state) => state.actionFlags);
   const submitJob = useStore((state) => state.submitJob);
-  const setAction = useStore((state) => state.setAction);
   const plateNumber = useStore((state) => state.plateNumber);
-  const outputFilename = useStore((state) => state.outputFilename);
+  const activeJobId = useStore((state) => state.activeJobId);
+  const jobStatus = useStore((state) => state.jobStatus);
+  const outputFiles = useStore((state) => state.outputFiles);
 
   const tabs: { id: MainTab; label: string }[] = [
     { id: 'prepare', label: 'Prepare' },
@@ -60,19 +64,20 @@ export const TopBar: React.FC<TopBarProps> = ({
     { id: 'calibration', label: 'Calibration' },
   ];
 
-  const exportActions: { id: Action; label: string }[] = [
-    { id: 'export_3mf', label: 'Export 3MF' },
-    { id: 'export_stl', label: 'Export STL' },
-    { id: 'export_stls', label: 'Export STLs' },
-    { id: 'export_settings', label: 'Export Settings' },
-  ];
-
   // Check if prerequisites are met for job submission
   const isSubmitDisabled =
     uploadedFiles.length === 0 ||
     !selectedPrinterProfile ||
     !selectedProcessProfile ||
     selectedFilamentProfiles.length === 0;
+
+  // Print is only enabled once the CURRENT job has actually finished
+  // slicing and produced a gcode — jobStatus/outputFiles are cleared the
+  // moment a new job is submitted (see jobSlice's submitJob), so this
+  // naturally re-disables the button the instant the user re-slices,
+  // rather than staying enabled from a stale previous slice.
+  const slicedGcode = jobStatus === 'completed' ? findGcodeOutput(outputFiles) : null;
+  const isPrintDisabled = !activeJobId || !slicedGcode;
 
   const handleSlice = async () => {
     if (isSubmitDisabled) return;
@@ -99,31 +104,9 @@ export const TopBar: React.FC<TopBarProps> = ({
     }
   };
 
-  const handleExport = async (exportAction: Action) => {
-    if (isSubmitDisabled) return;
-
-    try {
-      // Set the action in store first
-      setAction(exportAction);
-
-      await submitJob({
-        file_ids: uploadedFiles.map((f) => f.source_file_id),
-        printer_profile_path: selectedPrinterProfile!.path,
-        process_profile_path: selectedProcessProfile!.path,
-        filament_profile_paths: selectedFilamentProfiles.map((f) => f.path),
-        action: exportAction,
-        output_filename: outputFilename || undefined,
-        transforms: transforms as Record<string, unknown>,
-        parameter_overrides: parameterOverrides,
-        misc: misc as Record<string, unknown>,
-        action_flags: actionFlags as Record<string, boolean>,
-      });
-
-      setShowExportMenu(false);
-    } catch (error) {
-      console.error('Failed to submit export job:', error);
-      // Error handling could be improved with toast notifications
-    }
+  const handlePrintClick = () => {
+    if (isPrintDisabled) return;
+    setShowPrintDialog(true);
   };
 
   return (
@@ -182,49 +165,25 @@ export const TopBar: React.FC<TopBarProps> = ({
         {/* Output Files - only rendered once a job has completed */}
         <OutputFilesDropdown />
 
-        {/* Export Button (Secondary) with Dropdown */}
-        <div className="relative">
-          <button
-            onClick={() => setShowExportMenu(!showExportMenu)}
-            disabled={isSubmitDisabled}
-            className="
-              flex items-center gap-2 px-4 py-2 text-sm font-medium
-              bg-gray-700 text-white rounded
-              hover:bg-gray-600
-              disabled:opacity-50 disabled:cursor-not-allowed
-              transition-colors
-            "
-            title={
-              isSubmitDisabled
-                ? 'Upload files and select profiles to enable'
-                : 'Export options'
-            }
-          >
-            <Download className="w-4 h-4" />
-            Export
-            <ChevronDown className="w-3 h-3" />
-          </button>
-
-          {/* Export Dropdown Menu */}
-          {showExportMenu && !isSubmitDisabled && (
-            <div className="absolute right-0 mt-2 w-48 bg-gray-700 rounded-md shadow-lg z-50 border border-gray-600">
-              <div className="py-1">
-                {exportActions.map((action) => (
-                  <button
-                    key={action.id}
-                    onClick={() => handleExport(action.id)}
-                    className="
-                      block w-full text-left px-4 py-2 text-sm text-gray-200
-                      hover:bg-gray-600 transition-colors
-                    "
-                  >
-                    {action.label}
-                  </button>
-                ))}
-              </div>
-            </div>
-          )}
-        </div>
+        {/* Print Button (Secondary) — replaces the old Export button.
+            Disabled until the current job has actually finished slicing
+            and produced a gcode (re-disables itself the moment a new
+            slice is submitted, since submitJob clears outputFiles). */}
+        <button
+          onClick={handlePrintClick}
+          disabled={isPrintDisabled}
+          className="
+            flex items-center gap-2 px-4 py-2 text-sm font-medium
+            bg-gray-700 text-white rounded
+            hover:bg-gray-600
+            disabled:opacity-50 disabled:cursor-not-allowed
+            transition-colors
+          "
+          title={isPrintDisabled ? 'Slice the plate first to enable printing' : 'Send to printer'}
+        >
+          <Printer className="w-4 h-4" />
+          Print
+        </button>
 
         {/* Slice Button (Primary) */}
         <button
@@ -251,6 +210,15 @@ export const TopBar: React.FC<TopBarProps> = ({
 
       {/* Job Options Modal */}
       <JobOptionsModal isOpen={showJobOptions} onClose={() => setShowJobOptions(false)} />
+
+      {/* Send G-code to printer host dialog (matches native's
+          PrintHostSendDialog — see reference screenshot) */}
+      <PrintDialog
+        isOpen={showPrintDialog}
+        onClose={() => setShowPrintDialog(false)}
+        jobId={activeJobId}
+        defaultFilename={slicedGcode?.filename ?? ''}
+      />
     </header>
   );
 };

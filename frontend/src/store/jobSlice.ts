@@ -88,7 +88,7 @@ export interface JobSlice {
  * job_manager.py's `_register_output_files`, which just lists every file
  * OrcaSlicer's CLI wrote to the job's output directory). Returns null for
  * export jobs (3mf/stl/settings), which have no meaningful gcode preview. */
-function findGcodeOutput(outputFiles: OutputFileSummary[]): OutputFileSummary | null {
+export function findGcodeOutput(outputFiles: OutputFileSummary[]): OutputFileSummary | null {
   return outputFiles.find((f) => f.filename.toLowerCase().endsWith('.gcode')) ?? null;
 }
 

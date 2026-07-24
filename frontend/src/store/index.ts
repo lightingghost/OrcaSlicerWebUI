@@ -11,6 +11,7 @@ import { ObjectManipulationSlice, createObjectManipulationSlice } from './object
 import { ArrangeSettingsSlice, createArrangeSettingsSlice } from './arrangeSettingsSlice';
 import { ContextMenuSlice, createContextMenuSlice } from './contextMenuSlice';
 import { PreviewSlice, createPreviewSlice } from './previewSlice';
+import { DeviceSlice, createDeviceSlice } from './deviceSlice';
 
 export type StoreState = FileSlice &
   ProfileSlice &
@@ -23,7 +24,8 @@ export type StoreState = FileSlice &
   ObjectManipulationSlice &
   ArrangeSettingsSlice &
   ContextMenuSlice &
-  PreviewSlice;
+  PreviewSlice &
+  DeviceSlice;
 
 export const useStore = create<StoreState>()((...a) => ({
   ...createFileSlice(...a),
@@ -38,6 +40,7 @@ export const useStore = create<StoreState>()((...a) => ({
   ...createArrangeSettingsSlice(...a),
   ...createContextMenuSlice(...a),
   ...createPreviewSlice(...a),
+  ...createDeviceSlice(...a),
 }));
 
 // Export individual slice types and interfaces for convenience
@@ -51,6 +54,7 @@ export type {
   ProgressUpdateEvent,
   OutputFileSummary,
 } from './jobSlice';
+export { findGcodeOutput } from './jobSlice';
 export type { ParameterSlice, ParameterDescriptor } from './parameterSlice';
 export type { TransformSlice, TransformOptions } from './transformSlice';
 export type { ViewportSlice, BoundingBox, ModelMetadata } from './viewportSlice';
@@ -69,4 +73,5 @@ export type {
 export { DEFAULT_ARRANGE_SETTINGS } from './arrangeSettingsSlice';
 export type { ContextMenuSlice, ContextMenuState } from './contextMenuSlice';
 export type { PreviewSlice, MainTab } from './previewSlice';
+export type { DeviceSlice, DeviceConnection, HostType, PrinterAgent, UploadJobResult } from './deviceSlice';
 export { validateParameter } from '../lib/validation';

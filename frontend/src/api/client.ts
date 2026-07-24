@@ -156,6 +156,42 @@ export interface HealthResponse {
   workspace_accessible: boolean;
 }
 
+// ============================================================================
+// Device Connection (Device tab — local printer connection)
+// ============================================================================
+
+export type HostType = 'octo_klipper';
+export type PrinterAgent = 'moonraker';
+
+export interface DeviceConnection {
+  host_type: HostType;
+  printer_agent: PrinterAgent;
+  print_host: string;
+  device_ui: string;
+  printhost_apikey: string;
+  printhost_cafile: string;
+  connected: boolean;
+}
+
+export interface ConnectionTestResult {
+  success: boolean;
+  message: string;
+  klippy_state?: string | null;
+}
+
+export interface UploadJobRequest {
+  job_id: string;
+  filename?: string;
+  start_print: boolean;
+}
+
+export interface UploadJobResult {
+  success: boolean;
+  message: string;
+  uploaded_filename?: string | null;
+  print_started: boolean;
+}
+
 export interface ApiError {
   error: string;
   code?: string;
@@ -438,6 +474,47 @@ class ApiClient {
     const params = new URLSearchParams({ session_id: sessionId });
     return this.request<{ message: string }>(`/api/user-config?${params}`, {
       method: "DELETE",
+    });
+  }
+
+  // ==========================================================================
+  // Device Connection (Device tab)
+  // ==========================================================================
+
+  async getDeviceConnection(sessionId: string = "default"): Promise<DeviceConnection> {
+    const params = new URLSearchParams({ session_id: sessionId });
+    return this.request<DeviceConnection>(`/api/device-connection?${params}`);
+  }
+
+  async saveDeviceConnection(
+    connection: DeviceConnection,
+    sessionId: string = "default"
+  ): Promise<DeviceConnection> {
+    const params = new URLSearchParams({ session_id: sessionId });
+    return this.request<DeviceConnection>(`/api/device-connection?${params}`, {
+      method: "POST",
+      body: JSON.stringify(connection),
+    });
+  }
+
+  async deleteDeviceConnection(sessionId: string = "default"): Promise<{ message: string }> {
+    const params = new URLSearchParams({ session_id: sessionId });
+    return this.request<{ message: string }>(`/api/device-connection?${params}`, {
+      method: "DELETE",
+    });
+  }
+
+  async testDeviceConnection(connection: DeviceConnection): Promise<ConnectionTestResult> {
+    return this.request<ConnectionTestResult>(`/api/device-connection/test`, {
+      method: "POST",
+      body: JSON.stringify(connection),
+    });
+  }
+
+  async uploadJobToPrinter(request: UploadJobRequest): Promise<UploadJobResult> {
+    return this.request<UploadJobResult>(`/api/device-connection/upload`, {
+      method: "POST",
+      body: JSON.stringify(request),
     });
   }
 

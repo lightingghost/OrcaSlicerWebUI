@@ -41,8 +41,12 @@ export const Layout: React.FC = () => {
 
       {/* Main content area with LeftPanel and MainArea */}
       <div className="flex flex-1 min-h-0 overflow-hidden">
-        {/* LeftPanel - 480px fixed width */}
-        <LeftPanel />
+        {/* LeftPanel - 480px fixed width. Hidden on the Device tab: the
+            printer/filament/process profile settings it holds are
+            slicing-specific and have no bearing on connecting to /
+            viewing a physical printer's own UI, matching native
+            OrcaSlicer's Device tab, which also has no such sidebar. */}
+        {activeTab !== 'device' && <LeftPanel />}
 
         {/* MainArea - flex-1 to fill remaining space */}
         <MainArea />

@@ -41,9 +41,15 @@ describe('Layout', () => {
   const mockUseStore = useStore as unknown as ReturnType<typeof vi.fn>;
   const mockSubmitJob = vi.fn();
 
-  beforeEach(() => {
-    vi.clearAllMocks();
-    mockUseStore.mockReturnValue({
+  // Layout.tsx itself only reads `activeTab`/`setActiveTab` via selector
+  // functions (`useStore((state) => state.activeTab)`), while the
+  // (mocked-away) TopBar/MainArea children read everything else. Apply
+  // the selector against a full state object — rather than
+  // mockReturnValue's "ignore the selector, always return this object"
+  // — so `activeTab` resolves correctly regardless of which component
+  // is calling useStore.
+  const setMockState = (overrides: Record<string, unknown>) => {
+    const state = {
       submitJob: mockSubmitJob,
       uploadedFiles: [],
       selectedPrinterProfile: null,
@@ -52,7 +58,18 @@ describe('Layout', () => {
       queuePosition: null,
       progress: null,
       outputFiles: [],
-    });
+      activeTab: 'prepare',
+      setActiveTab: vi.fn(),
+      ...overrides,
+    };
+    mockUseStore.mockImplementation((selector?: (s: typeof state) => unknown) =>
+      typeof selector === 'function' ? selector(state) : state
+    );
+  };
+
+  beforeEach(() => {
+    vi.clearAllMocks();
+    setMockState({});
   });
 
   it('renders all major layout sections', () => {
@@ -136,5 +153,22 @@ describe('Layout', () => {
     expect(screen.getByTestId('topbar')).toBeInTheDocument();
     expect(screen.getByTestId('leftpanel')).toBeInTheDocument();
     expect(screen.getByTestId('mainarea')).toBeInTheDocument();
+  });
+
+  it('hides LeftPanel on the Device tab (Requirement 1: no printer/filament/process sidebar on Device page)', () => {
+    setMockState({ activeTab: 'device' });
+
+    render(<Layout />);
+
+    expect(screen.queryByTestId('leftpanel')).not.toBeInTheDocument();
+    expect(screen.getByTestId('mainarea')).toBeInTheDocument();
+  });
+
+  it('still shows LeftPanel on the Prepare tab', () => {
+    setMockState({ activeTab: 'prepare' });
+
+    render(<Layout />);
+
+    expect(screen.getByTestId('leftpanel')).toBeInTheDocument();
   });
 });

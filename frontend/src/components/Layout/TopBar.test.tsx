@@ -3,28 +3,42 @@
  * 
  * Tests for the TopBar component including:
  * - Tab navigation rendering and interaction
- * - Slice and Export button state management
+ * - Slice and Print button state management
  * - Store integration for job submission
  * 
  * Move/Rotate/Scale/Arrange toolbar tests now live in
  * ViewportTransformToolbar.test.tsx (that toolbar moved into the 3D
  * viewport to match the native OrcaSlicer UI).
+ *
+ * The Print button replaced the old Export button/dropdown (Requirements:
+ * "Replace the export button with a print button" — disabled until the
+ * plate has been sliced; clicking it opens PrintDialog, tested
+ * separately in PrintDialog.test.tsx).
  */
 
 import { describe, it, expect, vi, beforeEach } from 'vitest';
 import { render, screen, waitFor } from '@testing-library/react';
 import userEvent from '@testing-library/user-event';
 import { TopBar } from './TopBar';
-import { useStore } from '../../store';
+import { useStore, findGcodeOutput } from '../../store';
 
 // Mock the store
 vi.mock('../../store', () => ({
   useStore: vi.fn(),
+  findGcodeOutput: vi.fn(),
+}));
+
+// PrintDialog is exercised by its own test file — stub it here so
+// TopBar's tests stay focused on the button's own enable/disable/click
+// behavior rather than re-testing dialog internals.
+vi.mock('../Device/PrintDialog', () => ({
+  PrintDialog: ({ isOpen }: { isOpen: boolean }) =>
+    isOpen ? <div data-testid="print-dialog">PrintDialog</div> : null,
 }));
 
 describe('TopBar', () => {
   const mockSubmitJob = vi.fn();
-  const mockSetAction = vi.fn();
+  const mockFindGcodeOutput = findGcodeOutput as unknown as ReturnType<typeof vi.fn>;
 
   const defaultStoreState = {
     uploadedFiles: [{ file_id: 'file1', filename: 'test.stl', size_bytes: 1000, extension: 'stl' as const, uploaded_at: '2024-01-01', source_file_id: 'file1', is_clone: false }],
@@ -36,15 +50,16 @@ describe('TopBar', () => {
     misc: {},
     actionFlags: {},
     submitJob: mockSubmitJob,
-    setAction: mockSetAction,
-    action: 'slice' as const,
     plateNumber: 0,
-    outputFilename: '',
+    activeJobId: null as string | null,
+    jobStatus: null as string | null,
+    outputFiles: [] as { filename: string; size_bytes: number; download_url: string }[],
   };
 
   beforeEach(() => {
     vi.clearAllMocks();
     mockSubmitJob.mockResolvedValue(undefined);
+    mockFindGcodeOutput.mockReturnValue(null);
     (useStore as unknown as ReturnType<typeof vi.fn>).mockImplementation((selector: (state: typeof defaultStoreState) => unknown) => 
       selector(defaultStoreState)
     );
@@ -126,11 +141,11 @@ describe('TopBar', () => {
     });
   });
 
-  it('renders slice and export buttons', () => {
+  it('renders slice and print buttons', () => {
     render(<TopBar />);
 
     expect(screen.getByRole('button', { name: 'Slice' })).toBeInTheDocument();
-    expect(screen.getByRole('button', { name: 'Export' })).toBeInTheDocument();
+    expect(screen.getByRole('button', { name: 'Print' })).toBeInTheDocument();
   });
 
   it('disables slice button when no files uploaded', () => {
@@ -184,26 +199,80 @@ describe('TopBar', () => {
     expect(sliceButton).not.toBeDisabled();
   });
 
-  it('disables export button when no files uploaded', () => {
-    (useStore as unknown as ReturnType<typeof vi.fn>).mockImplementation((selector: (state: typeof defaultStoreState) => unknown) => 
-      selector({ ...defaultStoreState, uploadedFiles: [] })
-    );
-
+  it('disables Print button when no job has ever been submitted (Requirement 1: not clickable when unsliced)', () => {
     render(<TopBar />);
 
-    const exportButton = screen.getByRole('button', { name: 'Export' });
-    expect(exportButton).toBeDisabled();
+    const printButton = screen.getByRole('button', { name: 'Print' });
+    expect(printButton).toBeDisabled();
   });
 
-  it('disables export button when profiles not selected', () => {
+  it('disables Print button while a job is queued/running, even with a previous activeJobId', () => {
     (useStore as unknown as ReturnType<typeof vi.fn>).mockImplementation((selector: (state: typeof defaultStoreState) => unknown) => 
-      selector({ ...defaultStoreState, selectedPrinterProfile: null as never })
+      selector({ ...defaultStoreState, activeJobId: 'job-1', jobStatus: 'running' })
     );
 
     render(<TopBar />);
 
-    const exportButton = screen.getByRole('button', { name: 'Export' });
-    expect(exportButton).toBeDisabled();
+    expect(screen.getByRole('button', { name: 'Print' })).toBeDisabled();
+  });
+
+  it('disables Print button when the completed job has no gcode output (e.g. an export job)', () => {
+    mockFindGcodeOutput.mockReturnValue(null);
+    (useStore as unknown as ReturnType<typeof vi.fn>).mockImplementation((selector: (state: typeof defaultStoreState) => unknown) => 
+      selector({
+        ...defaultStoreState,
+        activeJobId: 'job-1',
+        jobStatus: 'completed',
+        outputFiles: [{ filename: 'export.3mf', size_bytes: 100, download_url: '/x' }],
+      })
+    );
+
+    render(<TopBar />);
+
+    expect(screen.getByRole('button', { name: 'Print' })).toBeDisabled();
+  });
+
+  it('enables Print button once the current job has completed with a sliced gcode (Requirement 2)', () => {
+    mockFindGcodeOutput.mockReturnValue({
+      filename: 'plate_1.gcode',
+      size_bytes: 1000,
+      download_url: '/api/jobs/job-1/outputs/plate_1.gcode',
+    });
+    (useStore as unknown as ReturnType<typeof vi.fn>).mockImplementation((selector: (state: typeof defaultStoreState) => unknown) => 
+      selector({
+        ...defaultStoreState,
+        activeJobId: 'job-1',
+        jobStatus: 'completed',
+        outputFiles: [{ filename: 'plate_1.gcode', size_bytes: 1000, download_url: '/x' }],
+      })
+    );
+
+    render(<TopBar />);
+
+    expect(screen.getByRole('button', { name: 'Print' })).not.toBeDisabled();
+  });
+
+  it('opens the Send G-code dialog when Print is clicked while enabled (Requirement 2)', async () => {
+    const user = userEvent.setup();
+    mockFindGcodeOutput.mockReturnValue({
+      filename: 'plate_1.gcode',
+      size_bytes: 1000,
+      download_url: '/x',
+    });
+    (useStore as unknown as ReturnType<typeof vi.fn>).mockImplementation((selector: (state: typeof defaultStoreState) => unknown) => 
+      selector({
+        ...defaultStoreState,
+        activeJobId: 'job-1',
+        jobStatus: 'completed',
+        outputFiles: [{ filename: 'plate_1.gcode', size_bytes: 1000, download_url: '/x' }],
+      })
+    );
+
+    render(<TopBar />);
+
+    expect(screen.queryByTestId('print-dialog')).not.toBeInTheDocument();
+    await user.click(screen.getByRole('button', { name: 'Print' }));
+    expect(screen.getByTestId('print-dialog')).toBeInTheDocument();
   });
 
   it('calls submitJob when slice button clicked', async () => {
@@ -229,40 +298,6 @@ describe('TopBar', () => {
     });
   });
 
-  it('shows export dropdown when export button clicked', async () => {
-    const user = userEvent.setup();
-
-    render(<TopBar />);
-
-    await user.click(screen.getByRole('button', { name: 'Export' }));
-
-    expect(screen.getByText('Export 3MF')).toBeInTheDocument();
-    expect(screen.getByText('Export STL')).toBeInTheDocument();
-    expect(screen.getByText('Export STLs')).toBeInTheDocument();
-    expect(screen.getByText('Export Settings')).toBeInTheDocument();
-  });
-
-  it('calls submitJob with correct export action', async () => {
-    const user = userEvent.setup();
-
-    render(<TopBar />);
-
-    // Open export menu
-    await user.click(screen.getByRole('button', { name: 'Export' }));
-
-    // Click Export 3MF
-    await user.click(screen.getByText('Export 3MF'));
-
-    await waitFor(() => {
-      expect(mockSetAction).toHaveBeenCalledWith('export_3mf');
-      expect(mockSubmitJob).toHaveBeenCalledWith(
-        expect.objectContaining({
-          action: 'export_3mf',
-        })
-      );
-    });
-  });
-
   it('has proper ARIA attributes for accessibility', () => {
     render(<TopBar />);
 
@@ -280,8 +315,8 @@ describe('TopBar', () => {
     const sliceButton = screen.getByRole('button', { name: 'Slice' });
     expect(sliceButton).toHaveClass('bg-purple-600');
 
-    // Export button should have secondary styling (gray background)
-    const exportButton = screen.getByRole('button', { name: 'Export' });
-    expect(exportButton).toHaveClass('bg-gray-700');
+    // Print button should have secondary styling (gray background)
+    const printButton = screen.getByRole('button', { name: 'Print' });
+    expect(printButton).toHaveClass('bg-gray-700');
   });
 });

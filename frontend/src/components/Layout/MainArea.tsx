@@ -15,6 +15,7 @@
 import React from 'react';
 import { ViewportContainer } from '../ViewportContainer';
 import { PreviewContainer } from '../Preview/PreviewContainer';
+import { DevicePage } from '../Device/DevicePage';
 import {
   JobProgressModal,
   ProgressBar,
@@ -48,12 +49,26 @@ export const MainArea: React.FC = () => {
           centered position. Keeping both mounted preserves viewport state
           exactly like native OrcaSlicer's Prepare/Preview tabs do. */}
       <div className="flex-1 min-h-0 relative overflow-hidden">
-        <div className={activeTab === 'preview' ? 'hidden' : 'w-full h-full'}>
+        {/* ViewportContainer's ViewportTransformToolbar overlay is
+            absolutely positioned within ThreeViewport, not scoped to
+            this wrapper div — it was previously only hidden while on the
+            Preview tab, so switching to the Device tab left it visibly
+            overlapping DevicePage underneath (confirmed via a real
+            browser screenshot: the Add/Move/Rotate/etc toolbar icons and
+            a translucent "Connected to..." bar bled through on top of
+            the device UI iframe). Must hide ViewportContainer for every
+            non-"prepare" tab, not just "preview". */}
+        <div className={activeTab === 'prepare' ? 'w-full h-full' : 'hidden'}>
           <ViewportContainer />
         </div>
         <div className={activeTab === 'preview' ? 'w-full h-full' : 'hidden'}>
           <PreviewContainer />
         </div>
+        {activeTab === 'device' && (
+          <div className="absolute inset-0">
+            <DevicePage />
+          </div>
+        )}
       </div>
 
       {/* JobStatusPanel - Conditional rendering based on job state */}
