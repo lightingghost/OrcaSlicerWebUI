@@ -1,35 +1,35 @@
-# Docker Compose configuration for OrcaSlicer Web UI
-# Full deployment orchestration for frontend and backend services
-
-version: '3.8'
+# Docker Compose configuration for OrcaSlicer Web UI.
+#
+# Single combined container: nginx serves the frontend and proxies
+# /api + /ws to the uvicorn backend running in the same container. The
+# OrcaSlicer CLI (extracted from the pinned AppImage release) is baked
+# into the image at build time, so no host bind-mount is required.
+#
+# ORCASLICER_VERSION / ARCH control which upstream source/AppImage the
+# image is built from and are read from build.env. Compose only expands
+# ${VAR} in this file from the shell environment or a top-level .env file,
+# NOT from a service's env_file:, so build with:
+#
+#   docker compose --env-file build.env build
+#   docker compose --env-file build.env up -d
+#
+# (see build.env for valid ORCASLICER_VERSION / ARCH values)
 
 services:
-  frontend:
+  orcaslicer-webui:
     build:
-      context: ./frontend
+      context: .
+      dockerfile: Dockerfile
       args:
-        - VITE_API_SECRET=${API_SECRET:-changeme}
+        ORCASLICER_VERSION: ${ORCASLICER_VERSION}
+        ARCH: ${ARCH}
+        VITE_API_SECRET: ${API_SECRET:-changeme}
     ports:
       - "80:80"
-    depends_on:
-      - backend
-    restart: unless-stopped
-
-  backend:
-    build: ./backend
-    ports:
-      - "8000:8000"
-    volumes:
-      - ../OrcaSlicer:/app/orca-slicer:ro
-      - workspace:/app/workspace
     environment:
-      - ORCA_CLI_PATH=/app/orca-slicer/build/linux/OrcaSlicer_ubu64
-      - WORKSPACE_ROOT=/app/workspace
-      - MAX_CONCURRENT_JOBS=4
-      - JOB_TIMEOUT_SECONDS=3600
-      - OUTPUT_RETENTION_SECONDS=86400
-      - JOB_RECORD_RETENTION_SECONDS=604800
       - API_SECRET=${API_SECRET:-changeme}
+    volumes:
+      - workspace:/app/workspace
     restart: unless-stopped
 
 volumes:

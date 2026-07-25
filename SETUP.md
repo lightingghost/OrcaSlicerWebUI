@@ -1,28 +1,30 @@
 # 🚀 OrcaSlicer Web UI Setup Instructions
 
-Here's a complete guide for setting up the Web UI with your AppImage:
+This guide covers setting up the OrcaSlicer Web UI with the new **combined-container Docker build** that includes both frontend and backend in a single image.
 
-## 📋 Quick Setup (5 steps)
+## 📋 Quick Setup (Docker - Recommended)
 
-### Step 1: Extract Your AppImage
+### Step 1: Configure Build Version
+
+The `build.env` file controls which OrcaSlicer version and architecture the Docker image is built for:
 
 ```bash
-cd /home/odin/local/orcaslicerWebUI
+cd /home/odin/local/orcaslicerWebUI/OrcaSlicerWebUI
 
-# Make executable
-chmod +x OrcaSlicer_Linux_AppImage_Ubuntu2404_V2.4.2.AppImage
-
-# Extract contents
-./OrcaSlicer_Linux_AppImage_Ubuntu2404_V2.4.2.AppImage --appimage-extract
-
-# This creates squashfs-root/ with:
-# ├── usr/bin/orca-slicer  (the CLI binary)
-# └── resources/profiles/  (Bambu, Prusa, Voron profiles)
+cat build.env
+# ORCASLICER_VERSION=2.4.2
+# ARCH=x86_64
 ```
 
-### Step 2: Configure Environment Variables
+**Valid values:**
+- `ORCASLICER_VERSION`: Version number **without leading "v"** (e.g. `2.4.2`, not `v2.4.2`)
+- `ARCH`: `x86_64` or `aarch64` (matches OrcaSlicer's AppImage release naming)
 
-Create a `.env` file in the OrcaSlicerWebUI directory to configure the API secret in one place:
+To use a different version, edit `build.env` before building.
+
+### Step 2: Configure API Secret (Optional but Recommended)
+
+Create a `.env` file in the OrcaSlicerWebUI directory for runtime configuration:
 
 ```bash
 cd /home/odin/local/orcaslicerWebUI/OrcaSlicerWebUI
@@ -38,83 +40,36 @@ EOF
 echo "Generated API_SECRET: ${API_SECRET}"
 ```
 
-This single environment variable will be used by both the frontend and backend.
+If you skip this step, the default `changeme` secret will be used (insecure for production).
 
-### Step 3: Update docker-compose.yml
-
-Edit `/home/odin/local/orcaslicerWebUI/OrcaSlicerWebUI/docker-compose.yml` to point to your extracted AppImage:
-
-```yaml
-version: '3.8'
-
-services:
-  frontend:
-    build:
-      context: ./frontend
-      args:
-        - VITE_API_SECRET=${API_SECRET:-changeme}
-    ports:
-      - "80:80"
-    depends_on:
-      - backend
-    restart: unless-stopped
-
-  backend:
-    build: ./backend
-    ports:
-      - "8000:8000"
-    volumes:
-      # Mount extracted AppImage (read-only)
-      - ../squashfs-root:/app/orca-slicer:ro
-      - workspace:/app/workspace
-    environment:
-      # Point to CLI inside the container
-      - ORCA_CLI_PATH=/app/orca-slicer/usr/bin/orca-slicer
-      - WORKSPACE_ROOT=/app/workspace
-      - MAX_CONCURRENT_JOBS=4
-      - JOB_TIMEOUT_SECONDS=3600
-      - OUTPUT_RETENTION_SECONDS=86400
-      - JOB_RECORD_RETENTION_SECONDS=604800
-      # API_SECRET from .env file
-      - API_SECRET=${API_SECRET:-changeme}
-    restart: unless-stopped
-
-volumes:
-  workspace:
-```
-
-**Key changes from default config:**
-- Volume path: `../squashfs-root:/app/orca-slicer:ro`
-- CLI path: `/app/orca-slicer/usr/bin/orca-slicer`
-- API_SECRET: Reads from `.env` file (configured in Step 2)
-
-### Step 4: Verify CLI Works
-
-```bash
-# Test the extracted CLI
-./squashfs-root/usr/bin/orca-slicer --help
-
-# Should show the same output as your AppImage
-# Verify profiles exist
-ls -la squashfs-root/resources/profiles/
-# Should see: Bambu Lab/, Prusa/, Voron/, etc.
-```
-
-### Step 5: Start the Web UI
+### Step 3: Build and Start
 
 ```bash
 cd /home/odin/local/orcaslicerWebUI/OrcaSlicerWebUI
 
-# Build and start
-docker-compose up --build
+# Build the image (first time: 5-10 minutes)
+docker compose --env-file build.env build
 
-# Or run in background
-docker-compose up --build -d
+# Start the container
+docker compose --env-file build.env up -d
+
+# Check logs
+docker compose logs -f
 ```
 
-**First startup takes 5-10 minutes** (building Docker images).
+**What happens during build:**
+1. Downloads OrcaSlicer source at the pinned version (to generate parameter JSON files)
+2. Generates `parameters.json` + `printer_config_dialog_options.json` + `filament_config_dialog_options.json`
+3. Deletes the source (never lands in final image)
+4. Downloads the OrcaSlicer AppImage for the pinned version/arch
+5. Extracts the AppImage to `squashfs-root/` (contains CLI + profiles)
+6. Builds the frontend (React + Vite)
+7. Builds the backend (FastAPI + Python deps)
+8. Assembles a single runtime image with nginx (serving frontend) + uvicorn (serving backend API)
 
-### Step 6: Access the UI
+**Image size:** ~1.8GB (includes full OrcaSlicer GUI dependencies for headless CLI operation)
+
+### Step 4: Access the UI
 
 Open your browser:
 ```
@@ -129,83 +84,29 @@ You should see:
 
 ---
 
-## 🐛 Troubleshooting
+## 🔧 Local Development Setup (Without Docker)
 
-### "Failed to fetch manufacturers: 401" or "Upload failed with status 401"
+For active development on the codebase itself (not for just using the Web UI), see `run-local.sh`:
 
-This means the frontend is not sending the correct authentication token.
-
-**For local development (using run-local.sh):**
-- The `run-local.sh` script automatically passes the `API_SECRET` environment variable to both backend and frontend
-- Simply restart: `./run-local.sh`
-
-**For Docker deployment:**
-1. Create a `.env` file in the OrcaSlicerWebUI directory:
-   ```bash
-   echo "API_SECRET=$(openssl rand -hex 32)" > .env
-   ```
-2. Ensure docker-compose.yml reads `${API_SECRET}` for both services (already configured)
-3. Rebuild with the new secret: `docker-compose up --build`
-
-**For standalone frontend development:**
-- Create `frontend/.env` with `VITE_API_SECRET=test-secret-key`
-- This must match the backend's `API_SECRET`
-
-### "CLI binary not found"
+### Prerequisites
 
 ```bash
-# Check the binary path in extraction
-ls -la squashfs-root/usr/bin/orca-slicer
-
-# If different location, update ORCA_CLI_PATH in docker-compose.yml
+# Extract an OrcaSlicer AppImage manually
+cd /home/odin/local/orcaslicerWebUI
+chmod +x OrcaSlicer_Linux_AppImage_Ubuntu2404_V2.4.2.AppImage
+./OrcaSlicer_Linux_AppImage_Ubuntu2404_V2.4.2.AppImage --appimage-extract
+# Creates squashfs-root/ with usr/bin/orca-slicer + resources/profiles/
 ```
 
-### "Profiles not found"
+### Backend
 
 ```bash
-# Verify profiles directory
-ls squashfs-root/resources/profiles/
-
-# Should contain manufacturer folders
-# If missing, re-extract the AppImage
-```
-
-### Port 80 already in use
-
-Change frontend port in docker-compose.yml:
-```yaml
-frontend:
-  ports:
-    - "8080:80"  # Use 8080 instead
-```
-
-Access at: `http://localhost:8080`
-
-### Backend won't start
-
-```bash
-# Check logs
-docker-compose logs backend
-
-# Common issues:
-# - ORCA_CLI_PATH pointing to wrong location
-# - Permissions on squashfs-root/
-# - Missing profiles directory
-```
-
----
-
-## 🔧 Development Mode (Optional)
-
-### Backend Only
-
-```bash
-cd backend
+cd OrcaSlicerWebUI/backend
 python3.11 -m venv .venv
 source .venv/bin/activate
 pip install -e ".[dev]"
 
-# Set environment
+# Configure (adjust paths to your setup)
 export ORCA_CLI_PATH=/home/odin/local/orcaslicerWebUI/squashfs-root/usr/bin/orca-slicer
 export WORKSPACE_ROOT=/tmp/orca-workspace
 export API_SECRET=dev-secret
@@ -214,40 +115,178 @@ export API_SECRET=dev-secret
 uvicorn app.main:app --reload --host 0.0.0.0 --port 8000
 ```
 
-### Frontend Only
+### Frontend
 
 ```bash
-cd frontend
+cd OrcaSlicerWebUI/frontend
 npm install
 
-# Create .env file with API secret (if running frontend standalone)
+# Create .env file with API secret
 cat > .env << 'EOF'
-VITE_API_SECRET=test-secret-key
+VITE_API_SECRET=dev-secret
 EOF
 
 npm run dev
 # Available at http://localhost:5173
 ```
 
-**Note**: When using `run-local.sh`, the API secret is automatically passed to the frontend. The `.env` file is only needed if running the frontend standalone.
+**Or use the provided script** (automatically configures paths + runs both frontend & backend):
+
+```bash
+cd /home/odin/local/orcaslicerWebUI/OrcaSlicerWebUI
+./run-local.sh
+```
 
 ---
 
-## 📊 Testing
+## 🐛 Troubleshooting
+
+### Docker Build Failures
+
+**Error: `ORCASLICER_VERSION variable is not set`**
+
+You forgot to pass `--env-file build.env` to docker compose. Always use:
 
 ```bash
-# Backend tests (includes property tests)
-cd backend
-pytest -v
-
-# Frontend tests
-cd frontend
-npm test
-
-# Property-based tests only
-pytest -v -m property  # Backend
-npm run test:property   # Frontend
+docker compose --env-file build.env build
+docker compose --env-file build.env up -d
 ```
+
+**Error: `unsquashfs: FATAL ERROR: Can't find a valid SQUASHFS superblock`** (old error, now fixed)
+
+This was fixed by using `./AppImage --appimage-extract` instead of `unsquashfs`. If you see this, ensure you're using the latest Dockerfile.
+
+**Error: Frontend TypeScript errors during build**
+
+The Dockerfile uses `vite build` (no type-checking) to avoid test file type errors. If you want strict type-checking, run `npm run build:check` locally before committing.
+
+### "Failed to fetch manufacturers: 401" or "Upload failed with status 401"
+
+The frontend and backend API secrets don't match.
+
+**For Docker:**
+- Ensure `.env` file exists with `API_SECRET=<your-secret>`
+- Rebuild: `docker compose --env-file build.env build`
+- Restart: `docker compose --env-file build.env up -d`
+
+**For local development:**
+- Backend: Set `export API_SECRET=dev-secret` before running uvicorn
+- Frontend: Create `frontend/.env` with `VITE_API_SECRET=dev-secret`
+- Or just use `./run-local.sh` which handles this automatically
+
+### Port 80 already in use
+
+Edit `docker-compose.yml`:
+```yaml
+services:
+  orcaslicer-webui:
+    ports:
+      - "8080:80"  # Use 8080 instead
+```
+
+Rebuild and access at: `http://localhost:8080`
+
+### Backend logs show "ORCA_CLI_PATH: binary not found"
+
+This should never happen with the Docker build (the CLI is baked into the image at a fixed path). If you see this:
+1. Check you're using the correct image: `docker images orcaslicerwebui-orcaslicer-webui`
+2. Verify the entrypoint didn't fail: `docker compose logs`
+3. Inspect the running container: `docker compose exec orcaslicer-webui ls -la /app/squashfs-root/usr/bin/`
+
+For local development, ensure `ORCA_CLI_PATH` points to your extracted AppImage's CLI binary.
+
+---
+
+## 🚢 Deploying to Production
+
+### Option 1: Local Docker
+
+```bash
+# Use a strong API secret
+echo "API_SECRET=$(openssl rand -hex 32)" > .env
+
+# Build and run
+docker compose --env-file build.env build
+docker compose --env-file build.env up -d
+
+# Set up HTTPS reverse proxy (nginx/Caddy) in front of port 80
+```
+
+### Option 2: GitHub Container Registry (Automated)
+
+The `.github/workflows/docker-build.yml` workflow automatically:
+1. Reads `build.env` on every push to `main`
+2. Builds the image with those pinned version/arch settings
+3. Publishes to `ghcr.io/<your-username>/orcaslicerwebui:<version>`
+
+**To use a published image:**
+
+```bash
+# Pull from GHCR (replace <your-username> with your GitHub username)
+docker pull ghcr.io/<your-username>/orcaslicerwebui:2.4.2
+
+# Or reference in docker-compose.yml:
+services:
+  orcaslicer-webui:
+    image: ghcr.io/<your-username>/orcaslicerwebui:2.4.2
+    environment:
+      - API_SECRET=${API_SECRET}
+    ports:
+      - "80:80"
+    volumes:
+      - workspace:/app/workspace
+    restart: unless-stopped
+
+volumes:
+  workspace:
+```
+
+Then just:
+```bash
+echo "API_SECRET=$(openssl rand -hex 32)" > .env
+docker compose up -d
+```
+
+---
+
+## 🔒 Production Checklist
+
+Before deploying publicly:
+
+- [ ] Set `API_SECRET` to `openssl rand -hex 32` output (in `.env`)
+- [ ] Set up HTTPS reverse proxy (Caddy/nginx with Let's Encrypt)
+- [ ] Configure firewall (only expose 443 publicly)
+- [ ] Adjust `MAX_CONCURRENT_JOBS` env var for your CPU cores (default: 4)
+- [ ] Set up automated backups for the `workspace` Docker volume
+- [ ] Configure log aggregation (e.g. docker logs → journald → Loki)
+- [ ] Review retention policies (`OUTPUT_RETENTION_SECONDS`, `JOB_RECORD_RETENTION_SECONDS`)
+- [ ] Test with real slicing workload and monitor disk I/O
+
+---
+
+## 📁 Where Files Are Stored
+
+Inside the Docker container:
+
+```
+/app/
+├── squashfs-root/            # Baked into image (OrcaSlicer AppImage extraction)
+│   ├── usr/bin/orca-slicer  # CLI binary
+│   └── resources/profiles/   # Profile library
+├── backend/                  # FastAPI app
+│   ├── app/
+│   │   └── data/parameters.json  # Generated at build time
+│   └── migrations/
+└── workspace/                # Persistent Docker volume
+    ├── sessions/             # User uploads (by session ID)
+    ├── jobs/                 # Job outputs (G-code files)
+    └── user_configs/         # User-created profiles
+```
+
+On your host machine:
+- **Docker volume**: Managed by Docker (`docker volume inspect orcaslicerwebui_workspace`)
+- **OrcaSlicer source**: Only exists during build (never in final image)
+- **AppImage**: Only exists during build (extracted content baked into image)
 
 ---
 
@@ -265,50 +304,38 @@ npm run test:property   # Frontend
 
 ---
 
-## 🔒 Production Checklist
-
-Before deploying publicly:
-
-- [ ] Change `API_SECRET` to `openssl rand -hex 32` output
-- [ ] Set up HTTPS reverse proxy (nginx/Caddy)
-- [ ] Configure firewall (only expose 443)
-- [ ] Adjust `MAX_CONCURRENT_JOBS` for your CPU
-- [ ] Set up backup for `workspace` volume
-- [ ] Configure log aggregation
-- [ ] Review retention policies for disk space
-- [ ] Test with real slicing workload
-
----
-
-## 📁 Where Files Are Stored
-
-Inside the Docker container:
-
-```
-/app/
-├── orca-slicer/              # Mounted from ../squashfs-root (read-only)
-│   ├── usr/bin/orca-slicer  # CLI binary
-│   └── resources/profiles/   # Profile library
-└── workspace/                # Persistent Docker volume
-    ├── sessions/             # User uploads (by session ID)
-    ├── jobs/                 # Job outputs (G-code files)
-    └── orcaslicer.db         # SQLite database
-```
-
-On your host machine:
-- **AppImage extraction**: `/home/odin/local/orcaslicerWebUI/squashfs-root/`
-- **Docker volume**: Managed by Docker (see `docker volume inspect orcaslicerwebui_workspace`)
-
----
-
 ## 🏗️ Architecture
 
+**Combined-Container (Current):**
 ```
-Browser → nginx (port 80) → FastAPI (port 8000) → OrcaSlicer CLI
-                ↓                    ↓
-         Static React UI      Job Queue + WebSocket
-                                     ↓
-                              SQLite + File Storage
+Browser → nginx (port 80) → FastAPI (localhost:8000) → OrcaSlicer CLI
+                ↓ (same container)       ↓
+         Static React UI          Job Queue + WebSocket
+                                       ↓
+                               SQLite + File Storage
+```
+
+Both nginx and uvicorn run in the same container, supervised by `docker/entrypoint.sh`.
+
+**Legacy (Separate Containers):**
+The old separate `frontend/Dockerfile` + `backend/Dockerfile` are kept for reference but are no longer used by `docker-compose.yml`.
+
+---
+
+## 📊 Testing
+
+```bash
+# Backend tests (includes property tests)
+cd backend
+pytest -v
+
+# Frontend tests
+cd frontend
+npm test
+
+# Property-based tests only
+pytest -v -m property  # Backend
+npm run test:property   # Frontend (if script exists)
 ```
 
 ---
@@ -318,22 +345,23 @@ Browser → nginx (port 80) → FastAPI (port 8000) → OrcaSlicer CLI
 - **Requirements**: `.kiro/specs/orca-slicer-web-ui/requirements.md`
 - **Design**: `.kiro/specs/orca-slicer-web-ui/design.md`
 - **Task Plan**: `.kiro/specs/orca-slicer-web-ui/tasks.md`
+- **Build Config**: `build.env` (version/arch pinning)
+- **Runtime Config**: `.env` (API secret)
+- **Docker Build**: `Dockerfile` (multi-stage combined image)
+- **Docker Compose**: `docker-compose.yml` (single service)
+- **GitHub Actions**: `.github/workflows/docker-build.yml` (CI/CD to GHCR)
 
 ---
 
-## ✅ Spec Implementation Status
+## ✅ Implementation Status
 
 **All 110 implementation tasks completed!** 🎉
 
-The spec includes:
-- ✅ Complete backend (FastAPI + SQLite + job queue)
-- ✅ Complete frontend (React + Three.js + WebSocket)
-- ✅ 21 correctness properties with property-based tests
-- ✅ Docker deployment configuration
-- ✅ End-to-end integration tests
+Recent additions:
+- ✅ Combined frontend+backend Docker container (single image)
+- ✅ Automated OrcaSlicer source/AppImage download at build time
+- ✅ Generated parameter JSON files baked into image
+- ✅ GitHub Actions workflow for publishing to GHCR
+- ✅ Cleaned docker-compose.yml (no bind-mounts, single service)
 
 **Ready for production use!**
-
----
-
-Save these instructions as `SETUP.md` in your `OrcaSlicerWebUI/` directory for future reference.

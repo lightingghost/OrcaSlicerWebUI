@@ -1,121 +1,162 @@
 # OrcaSlicer Web UI
 
-A browser-based front-end for the OrcaSlicer CLI, enabling users to upload 3D models, configure slicing parameters, and monitor slicing jobs in real-time—all from a web browser.
+A web-based interface for [OrcaSlicer](https://github.com/OrcaSlicer/OrcaSlicer), enabling browser-based 3D model slicing with real-time preview and job management.
 
-## Architecture
+## ✨ Features
 
-- **Backend**: FastAPI Python server that wraps the OrcaSlicer CLI
-- **Frontend**: React 18 + TypeScript SPA with Three.js 3D viewport
-- **Deployment**: Docker Compose with nginx reverse proxy
+- 🌐 **Web-based**: Access from any device on your network
+- 🎨 **3D Preview**: Real-time model visualization with Three.js
+- ⚡ **Fast Slicing**: Leverages native OrcaSlicer CLI for speed
+- 🔄 **Real-time Updates**: WebSocket-based progress tracking
+- 📦 **Profile Library**: Full access to OrcaSlicer's manufacturer profiles (Bambu Lab, Prusa, Voron, etc.)
+- 🎛️ **Parameter Control**: Fine-tune 800+ slicing parameters via web UI
+- 🚀 **Job Queue**: Concurrent slicing with configurable limits
+- 🐳 **Docker Deploy**: Single-container image with frontend + backend + OrcaSlicer CLI
 
-## Features
-
-### Core Functionality
-- 3D model file upload (STL, 3MF, OBJ, AMF)
-- Interactive 3D viewport with Three.js
-- Profile management (printer, process, filament)
-- Full parameter configuration
-- Real-time progress monitoring via WebSocket
-- Job queue and execution management
-- Output file download
-- Job history
-
-### Security
-- Path traversal protection
-- Parameter allowlist validation
-- Schema validation with Pydantic v2
-- Authentication via Bearer token
-- No shell interpolation (subprocess list args)
-
-### Quality Assurance
-- Property-based testing (Hypothesis + fast-check)
-- Unit tests for all components
-- Integration tests for end-to-end flows
-- 21 correctness properties verified
-
-## Project Structure
-
-```
-OrcaSlicerWebUI/
-├── backend/
-│   ├── app/              # FastAPI application
-│   ├── migrations/       # Database migrations
-│   ├── tests/            # Backend tests
-│   ├── pyproject.toml    # Python dependencies
-│   └── README.md
-├── frontend/
-│   ├── src/              # React application source
-│   ├── public/           # Static assets
-│   ├── package.json      # npm dependencies
-│   └── README.md
-└── docker-compose.yml    # Docker orchestration
-```
-
-## Quick Start
-
-### Prerequisites
-
-- Docker and Docker Compose
-- OrcaSlicer CLI binary
-
-### Run with Docker Compose
+## 🚀 Quick Start
 
 ```bash
-docker-compose up
+# Clone the repository
+git clone <your-repo-url>
+cd OrcaSlicerWebUI
+
+# Configure the OrcaSlicer version to use (optional, defaults to 2.4.2/x86_64)
+# Edit build.env if you want a different version or architecture
+cat build.env
+# ORCASLICER_VERSION=2.4.2
+# ARCH=x86_64
+
+# Build and start (first time: ~5-10 minutes)
+docker compose --env-file build.env build
+docker compose --env-file build.env up -d
+
+# Access the UI
+open http://localhost
 ```
 
-Access the UI at `http://localhost:80`
+**That's it!** The container includes:
+- React frontend (nginx on port 80)
+- FastAPI backend (uvicorn on localhost:8000)
+- OrcaSlicer CLI (extracted from official AppImage)
+- All manufacturer profiles (Bambu Lab, Prusa, Voron, etc.)
 
-### Development
+## 📖 Documentation
 
-#### Backend
+- **[SETUP.md](SETUP.md)**: Detailed setup guide (Docker + local development)
+- **[build.env](build.env)**: Build-time configuration (version/arch pinning)
+- **.env** (create this): Runtime configuration (API secret, optional)
+
+## 🔒 Security
+
+The default API secret is `changeme` (insecure). For production, create a `.env` file:
 
 ```bash
+echo "API_SECRET=$(openssl rand -hex 32)" > .env
+```
+
+Then rebuild and restart:
+
+```bash
+docker compose --env-file build.env build
+docker compose --env-file build.env up -d
+```
+
+## 🏗️ Architecture
+
+```
+Browser → nginx → FastAPI → OrcaSlicer CLI
+              ↓         ↓
+       React SPA   Job Queue + WebSocket
+                        ↓
+                SQLite + File Storage
+```
+
+**Tech Stack:**
+- **Frontend**: React 18 + TypeScript + Three.js + Zustand
+- **Backend**: Python 3.11 + FastAPI + SQLAlchemy + asyncio
+- **Runtime**: nginx + uvicorn (single container)
+- **Slicing**: OrcaSlicer 2.4.2 CLI (headless)
+
+## 📦 What Gets Downloaded at Build Time
+
+The Dockerfile automatically:
+1. Downloads OrcaSlicer source (shallow git clone at pinned version)
+2. Generates parameter JSON files from source
+3. Deletes the source (never in final image)
+4. Downloads OrcaSlicer AppImage (from GitHub releases)
+5. Extracts the AppImage to get CLI + profiles
+6. Bakes everything into a single ~1.8GB image
+
+**No manual AppImage download required!** Just edit `build.env` to change versions.
+
+## 🚢 Deployment
+
+### Local / Self-Hosted
+
+See [SETUP.md](SETUP.md) for Docker Compose deployment with HTTPS reverse proxy.
+
+### GitHub Container Registry (CI/CD)
+
+On every push to `main`, GitHub Actions:
+1. Reads `build.env` for version/arch
+2. Builds the image
+3. Publishes to `ghcr.io/<your-username>/orcaslicerwebui:<version>`
+
+Pull and run a published image:
+
+```bash
+docker pull ghcr.io/<your-username>/orcaslicerwebui:2.4.2
+echo "API_SECRET=$(openssl rand -hex 32)" > .env
+
+docker run -d \
+  -p 80:80 \
+  -v orcaslicer-workspace:/app/workspace \
+  -e API_SECRET=$(cat .env | cut -d= -f2) \
+  ghcr.io/<your-username>/orcaslicerwebui:2.4.2
+```
+
+## 🔧 Development
+
+For local development without Docker:
+
+```bash
+# Backend
 cd backend
+python3.11 -m venv .venv
+source .venv/bin/activate
 pip install -e ".[dev]"
+export ORCA_CLI_PATH=/path/to/squashfs-root/usr/bin/orca-slicer
 uvicorn app.main:app --reload
-```
 
-#### Frontend
-
-```bash
+# Frontend
 cd frontend
 npm install
+echo "VITE_API_SECRET=dev-secret" > .env
 npm run dev
 ```
 
-## Configuration
+**Or use the quickstart script:**
 
-Environment variables for the backend (see `docker-compose.yml`):
-
-- `ORCA_CLI_PATH`: Path to OrcaSlicer CLI binary
-- `WORKSPACE_ROOT`: File storage root directory
-- `MAX_CONCURRENT_JOBS`: Concurrent job limit (default: 4)
-- `JOB_TIMEOUT_SECONDS`: Job timeout (default: 3600)
-- `OUTPUT_RETENTION_SECONDS`: Output file retention (default: 86400)
-- `JOB_RECORD_RETENTION_SECONDS`: Job record retention (default: 604800)
-- `API_SECRET`: Authentication secret
-
-## Testing
-
-### Backend
 ```bash
-cd backend
-pytest
+./run-local.sh
 ```
 
-### Frontend
+## 🧪 Testing
+
 ```bash
+# Backend tests
+cd backend
+pytest -v
+
+# Frontend tests
 cd frontend
 npm test
 ```
 
-## Documentation
+## 📝 License
 
-- [Requirements](/.kiro/specs/orca-slicer-web-ui/requirements.md)
-- [Design](/.kiro/specs/orca-slicer-web-ui/design.md)
-- [Task Plan](/.kiro/specs/orca-slicer-web-ui/tasks.md)
+See [LICENSE](LICENSE) for details.
 
-## License
+## 🙏 Credits
 
-See parent OrcaSlicer project for license information.
+Built on top of [OrcaSlicer](https://github.com/OrcaSlicer/OrcaSlicer) by SoftFever and contributors.
