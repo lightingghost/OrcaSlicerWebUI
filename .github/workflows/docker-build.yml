@@ -76,7 +76,10 @@ jobs:
 
       - name: Load build config (ORCASLICER_VERSION)
         run: |
-          cat build.env >> "$GITHUB_ENV"
+          # build.env is comment-heavy (see the file itself) — $GITHUB_ENV
+          # only accepts KEY=VALUE lines, so strip blank lines and
+          # comments before appending rather than `cat`-ing the whole file.
+          grep -Ev '^\s*(#|$)' build.env >> "$GITHUB_ENV"
           # A manually-supplied version overrides the one pinned in
           # build.env, so a workflow_dispatch run can build/publish a
           # different OrcaSlicer release without editing the repo.
@@ -164,7 +167,7 @@ jobs:
 
       - name: Load build config (ORCASLICER_VERSION)
         run: |
-          cat build.env >> "$GITHUB_ENV"
+          grep -Ev '^\s*(#|$)' build.env >> "$GITHUB_ENV"
           if [ -n "${{ inputs.orcaslicer_version }}" ]; then
             echo "ORCASLICER_VERSION=${{ inputs.orcaslicer_version }}" >> "$GITHUB_ENV"
           fi
