@@ -7,8 +7,17 @@ Requirements: 12.1, 12.2
 Environment Variables
 ---------------------
 ORCA_CLI_PATH           Path to the OrcaSlicer CLI binary (must be absolute)
-WORKSPACE_ROOT          Root directory for job/session file storage (must be absolute,
-                        default: /app/workspace)
+WORKSPACE_ROOT          Root directory for PERSISTENT, repeatedly-reused data: user
+                        configs (printer/filament/process saves + autosaves) and
+                        user-uploaded custom profiles (must be absolute,
+                        default: /app/workspace). Back this with durable storage
+                        (e.g. a Docker volume) — it is expected to survive restarts.
+TMP_ROOT                Root directory for EPHEMERAL, per-session/per-job data:
+                        uploaded model files, job outputs (gcode/3mf/logs), and the
+                        SQLite job/file-metadata database (must be absolute,
+                        default: /app/tmp). Safe to back with tmpfs or any storage
+                        that does not need to survive a restart — nothing under
+                        here is expected to persist.
 USER_WORKSPACE          Root directory for user-saved configs (printer, filament, process).
                         If not set, defaults to WORKSPACE_ROOT/user_configs.
                         The following subdirectories are created automatically on startup:
@@ -50,12 +59,23 @@ class Settings(BaseSettings):
         ),
     ]
 
-    # Workspace root directory for job/session file storage (must be absolute)
+    # Workspace root directory for PERSISTENT data: user configs + custom
+    # profiles (must be absolute)
     workspace_root: Annotated[
         Path,
         Field(
             default=Path("/app/workspace"),
-            description="Absolute path to workspace root for job/session file storage",
+            description="Absolute path to workspace root for persistent user config/profile storage",
+        ),
+    ]
+
+    # Tmp root directory for EPHEMERAL data: session uploads, job outputs,
+    # logs, and the sqlite db (must be absolute)
+    tmp_root: Annotated[
+        Path,
+        Field(
+            default=Path("/app/tmp"),
+            description="Absolute path to tmp root for ephemeral session/job file storage",
         ),
     ]
 
@@ -106,7 +126,7 @@ class Settings(BaseSettings):
         ),
     ]
 
-    @field_validator("orca_cli_path", "workspace_root")
+    @field_validator("orca_cli_path", "workspace_root", "tmp_root")
     @classmethod
     def validate_absolute_path(cls, v: Path, info) -> Path:
         """Ensure path is absolute."""
@@ -155,17 +175,18 @@ class Settings(BaseSettings):
 
     @property
     def session_uploads_dir(self) -> Path:
-        """Directory for session upload files."""
-        return self.workspace_root / "sessions"
+        """Directory for session upload files (ephemeral — under tmp_root)."""
+        return self.tmp_root / "sessions"
 
     @property
     def jobs_output_dir(self) -> Path:
-        """Directory for job output files."""
-        return self.workspace_root / "jobs"
+        """Directory for job output files (ephemeral — under tmp_root)."""
+        return self.tmp_root / "jobs"
 
     @property
     def custom_profiles_dir(self) -> Path:
-        """Directory for user-uploaded custom profiles."""
+        """Directory for user-uploaded custom profiles (persistent — under
+        workspace_root, alongside user configs/autosaves)."""
         return self.workspace_root / "custom_profiles"
 
     @property
@@ -217,6 +238,21 @@ class Settings(BaseSettings):
             self.process_configs_dir,
         ):
             category_dir.mkdir(parents=True, exist_ok=True)
+
+    def init_tmp_workspace(self) -> None:
+        """
+        Create the ephemeral tmp_root directory tree if it does not exist.
+
+        Creates:
+            <tmp_root>/sessions/   ← per-session uploaded model files
+            <tmp_root>/jobs/       ← per-job outputs (gcode/3mf/logs)
+
+        Called on every startup (unlike init_user_workspace's persistent
+        tree, this one is expected to start empty whenever tmp_root is
+        backed by tmpfs/ephemeral storage).
+        """
+        self.session_uploads_dir.mkdir(parents=True, exist_ok=True)
+        self.jobs_output_dir.mkdir(parents=True, exist_ok=True)
 
 
 # Singleton instance

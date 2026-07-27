@@ -24,6 +24,7 @@ class TestSettingsDefaults:
         for key in [
             "ORCA_CLI_PATH",
             "WORKSPACE_ROOT",
+            "TMP_ROOT",
             "MAX_CONCURRENT_JOBS",
             "JOB_TIMEOUT_SECONDS",
             "OUTPUT_RETENTION_SECONDS",
@@ -40,6 +41,7 @@ class TestSettingsDefaults:
             "/app/orca-slicer/build/linux/OrcaSlicer_ubu64"
         )
         assert settings.workspace_root == Path("/app/workspace")
+        assert settings.tmp_root == Path("/app/tmp")
         assert settings.max_concurrent_jobs == 4
         assert settings.job_timeout_seconds == 3600
         assert settings.output_retention_seconds == 86400
@@ -54,6 +56,7 @@ class TestSettingsEnvironmentVariables:
         """Settings should override defaults when env vars are provided."""
         monkeypatch.setenv("ORCA_CLI_PATH", "/custom/path/to/orca")
         monkeypatch.setenv("WORKSPACE_ROOT", "/custom/workspace")
+        monkeypatch.setenv("TMP_ROOT", "/custom/tmp")
         monkeypatch.setenv("MAX_CONCURRENT_JOBS", "8")
         monkeypatch.setenv("JOB_TIMEOUT_SECONDS", "7200")
         monkeypatch.setenv("OUTPUT_RETENTION_SECONDS", "43200")
@@ -64,6 +67,7 @@ class TestSettingsEnvironmentVariables:
 
         assert settings.orca_cli_path == Path("/custom/path/to/orca")
         assert settings.workspace_root == Path("/custom/workspace")
+        assert settings.tmp_root == Path("/custom/tmp")
         assert settings.max_concurrent_jobs == 8
         assert settings.job_timeout_seconds == 7200
         assert settings.output_retention_seconds == 43200
@@ -133,6 +137,16 @@ class TestSettingsValidation:
 
         assert "absolute path" in str(exc_info.value).lower()
 
+    def test_tmp_root_must_be_absolute(self, monkeypatch):
+        """tmp_root must be an absolute path."""
+        monkeypatch.setenv("TMP_ROOT", "relative/tmp")
+        monkeypatch.setenv("API_SECRET", "test_secret")
+
+        with pytest.raises(ValidationError) as exc_info:
+            Settings()
+
+        assert "absolute path" in str(exc_info.value).lower()
+
 
 class TestDerivedProperties:
     """Test that derived properties compute correct paths."""
@@ -157,22 +171,22 @@ class TestDerivedProperties:
         assert settings.profiles_root == expected
 
     def test_session_uploads_dir(self, monkeypatch):
-        """session_uploads_dir should be workspace_root/sessions."""
-        monkeypatch.setenv("WORKSPACE_ROOT", "/custom/workspace")
+        """session_uploads_dir should be tmp_root/sessions (ephemeral)."""
+        monkeypatch.setenv("TMP_ROOT", "/custom/tmp")
         monkeypatch.setenv("API_SECRET", "test_secret")
 
         settings = Settings()
 
-        assert settings.session_uploads_dir == Path("/custom/workspace/sessions")
+        assert settings.session_uploads_dir == Path("/custom/tmp/sessions")
 
     def test_jobs_output_dir(self, monkeypatch):
-        """jobs_output_dir should be workspace_root/jobs."""
-        monkeypatch.setenv("WORKSPACE_ROOT", "/custom/workspace")
+        """jobs_output_dir should be tmp_root/jobs (ephemeral)."""
+        monkeypatch.setenv("TMP_ROOT", "/custom/tmp")
         monkeypatch.setenv("API_SECRET", "test_secret")
 
         settings = Settings()
 
-        assert settings.jobs_output_dir == Path("/custom/workspace/jobs")
+        assert settings.jobs_output_dir == Path("/custom/tmp/jobs")
 
     def test_custom_profiles_dir(self, monkeypatch):
         """custom_profiles_dir should be workspace_root/custom_profiles."""

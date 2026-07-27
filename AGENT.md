@@ -34,9 +34,10 @@ Browser ── nginx (prod, :80) / vite dev server (:5173)
         FastAPI backend (:8000)
               │
               ├── spawns `orca-slicer` CLI as a subprocess (job_manager.py + cli_builder.py)
-              ├── SQLite (job records, user config)
+              ├── SQLite (job records, file metadata) — under TMP_ROOT, ephemeral
               ├── WebSocket per job (real-time progress from CLI's progress pipe)
-              └── file storage under WORKSPACE_ROOT (uploads, job outputs)
+              ├── WORKSPACE_ROOT (persistent): user configs, autosaves, custom profiles
+              └── TMP_ROOT (ephemeral, tmpfs-able): uploads, job outputs, logs, db
 ```
 
 - **Backend**: FastAPI (Python), wraps the OrcaSlicer CLI. See
@@ -184,7 +185,8 @@ Backend settings (`backend/app/config.py`, env-var driven, see
 | Variable | Default | Purpose |
 |---|---|---|
 | `ORCA_CLI_PATH` | `/app/orca-slicer/build/linux/OrcaSlicer_ubu64` | path to `orca-slicer` binary |
-| `WORKSPACE_ROOT` | `/app/workspace` | root for uploads/job outputs/db |
+| `WORKSPACE_ROOT` | `/app/workspace` | persistent: user configs/autosaves/custom profiles |
+| `TMP_ROOT` | `/app/tmp` | ephemeral: uploads/job outputs/logs/db (tmpfs-able) |
 | `MAX_CONCURRENT_JOBS` | 4 | job queue concurrency |
 | `JOB_TIMEOUT_SECONDS` | 3600 | kill CLI subprocess after this long |
 | `OUTPUT_RETENTION_SECONDS` | 86400 | output file cleanup age |

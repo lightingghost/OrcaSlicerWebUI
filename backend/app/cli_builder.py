@@ -266,7 +266,7 @@ def build_cli_args(
             raise ValueError(f"File not found: {file_id}")
         file_path = resolve_and_guard(
             stored_path if stored_path.is_absolute() else Path(stored_path),
-            config.workspace_root
+            config.tmp_root
         )
         args.append(str(file_path))
     
@@ -454,7 +454,7 @@ def build_cli_args(
                 raise ValueError(f"File not found: {custom_gcode_file_id}")
             gcode_path = resolve_and_guard(
                 stored_gcode_path if stored_gcode_path.is_absolute() else Path(stored_gcode_path),
-                config.workspace_root
+                config.tmp_root
             )
             args.extend(["--load-custom-gcodes", str(gcode_path)])
         

@@ -99,13 +99,22 @@ async def lifespan(app: FastAPI) -> AsyncIterator[None]:
         print(f"✗ Authentication initialization failed: {e}")
         raise
 
-    # Startup: Initialise user workspace directory tree
+    # Startup: Initialise user workspace directory tree (persistent)
     try:
         from app.config import settings as _s
         _s.init_user_workspace()
         print(f"✓ User workspace initialised at {_s.user_workspace_root}")
     except Exception as e:
         print(f"✗ User workspace initialisation failed: {e}")
+        raise
+
+    # Startup: Initialise tmp workspace directory tree (ephemeral)
+    try:
+        from app.config import settings as _s
+        _s.init_tmp_workspace()
+        print(f"✓ Tmp workspace initialised at {_s.tmp_root}")
+    except Exception as e:
+        print(f"✗ Tmp workspace initialisation failed: {e}")
         raise
     
     # Startup: Initialize database
@@ -211,15 +220,18 @@ async def health_check():
     
     cli_available = Path(settings.orca_cli_path).exists() and Path(settings.orca_cli_path).is_file()
     workspace_accessible = Path(settings.workspace_root).exists() and Path(settings.workspace_root).is_dir()
-    
-    status = "healthy" if (cli_available and workspace_accessible) else "degraded"
-    
+    tmp_accessible = Path(settings.tmp_root).exists() and Path(settings.tmp_root).is_dir()
+
+    status = "healthy" if (cli_available and workspace_accessible and tmp_accessible) else "degraded"
+
     return {
         "status": status,
         "cli_available": cli_available,
         "cli_path": settings.orca_cli_path,
         "workspace_accessible": workspace_accessible,
         "workspace_root": settings.workspace_root,
+        "tmp_accessible": tmp_accessible,
+        "tmp_root": settings.tmp_root,
     }
 
 

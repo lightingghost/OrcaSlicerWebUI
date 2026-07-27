@@ -26,23 +26,35 @@ def _reset_app_modules():
 
 @pytest.fixture
 def temp_workspace(tmp_path):
-    """Create a temporary workspace directory for testing."""
+    """
+    Create temporary workspace + tmp_root directories for testing.
+
+    Uploaded files/sessions now live under tmp_root (ephemeral), not
+    workspace_root (persistent) — see config.py's tmp_root docstring —
+    so tests that assert on-disk upload paths use the returned tmp_root
+    path, not workspace.
+    """
     workspace = tmp_path / "workspace"
     workspace.mkdir()
+    tmp_root = tmp_path / "tmp"
+    tmp_root.mkdir()
 
     # Set environment variable
     import os
     os.environ["WORKSPACE_ROOT"] = str(workspace)
+    os.environ["TMP_ROOT"] = str(tmp_root)
     os.environ["API_SECRET"] = "test_secret_12345678"
     os.environ["ORCA_CLI_PATH"] = "/tmp/fake_cli"  # Non-existent but valid path format
 
     _reset_app_modules()
 
-    yield workspace
+    yield tmp_root
 
     # Cleanup
     if "WORKSPACE_ROOT" in os.environ:
         del os.environ["WORKSPACE_ROOT"]
+    if "TMP_ROOT" in os.environ:
+        del os.environ["TMP_ROOT"]
     if "API_SECRET" in os.environ:
         del os.environ["API_SECRET"]
     if "ORCA_CLI_PATH" in os.environ:

@@ -235,6 +235,8 @@ services:
       - "80:80"
     volumes:
       - workspace:/app/workspace
+    tmpfs:
+      - /app/tmp:size=2g
     restart: unless-stopped
 
 volumes:
@@ -266,6 +268,18 @@ Before deploying publicly:
 
 ## 📁 Where Files Are Stored
 
+Storage is split into two roots by lifecycle (see `backend/app/config.py`'s
+`Settings` docstring):
+
+- **`/app/workspace`** — PERSISTENT. User configs, autosaves, and
+  user-uploaded custom profiles. Backed by the `workspace` Docker volume,
+  so it survives container restarts/recreations.
+- **`/app/tmp`** — EPHEMERAL. Session uploads, job outputs (gcode/3mf/
+  logs), and the sqlite job/file-metadata database. Backed by **tmpfs**
+  (in-memory) in `docker-compose.yml` — nothing here is expected to
+  survive a restart, and keeping it off the host disk avoids wearing out
+  storage on repeated slice-job I/O.
+
 Inside the Docker container:
 
 ```
@@ -277,14 +291,20 @@ Inside the Docker container:
 │   ├── app/
 │   │   └── data/parameters.json  # Generated at build time
 │   └── migrations/
-└── workspace/                # Persistent Docker volume
+├── workspace/                # Persistent Docker volume
+│   ├── custom_profiles/     # User-uploaded custom profiles
+│   └── user_configs/        # Saved printer/filament/process configs + autosaves
+└── tmp/                      # Ephemeral, tmpfs-backed
     ├── sessions/             # User uploads (by session ID)
-    ├── jobs/                 # Job outputs (G-code files)
-    └── user_configs/         # User-created profiles
+    ├── jobs/                 # Job outputs (G-code files, logs)
+    └── orcaslicer_webui.db   # SQLite job/file metadata
 ```
 
 On your host machine:
 - **Docker volume**: Managed by Docker (`docker volume inspect orcaslicerwebui_workspace`)
+- **tmpfs mount**: RAM-backed, not visible as a host file — size it via
+  `docker-compose.yml`'s `tmpfs: - /app/tmp:size=2g` (raise for large
+  models or many concurrent jobs; requires enough host RAM)
 - **OrcaSlicer source**: Only exists during build (never in final image)
 - **AppImage**: Only exists during build (extracted content baked into image)
 

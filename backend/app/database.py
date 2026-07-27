@@ -15,12 +15,18 @@ from app.config import settings
 def get_db_path() -> Path:
     """
     Get the path to the database file.
-    
+
+    The database holds only ephemeral job/file metadata (rows referencing
+    on-disk paths under tmp_root — see migrations/001_initial.sql), so the
+    db file itself lives under tmp_root too. This keeps it eligible for
+    tmpfs-backed storage in docker-compose.yml, since nothing in it is
+    expected to survive a restart (unlike workspace_root's user configs).
+
     Returns:
         Path to the SQLite database file
     """
-    workspace_path = Path(settings.workspace_root)
-    return workspace_path / "orcaslicer_webui.db"
+    tmp_path = Path(settings.tmp_root)
+    return tmp_path / "orcaslicer_webui.db"
 
 
 async def init_db() -> None:
@@ -30,9 +36,9 @@ async def init_db() -> None:
     Creates the database file if it doesn't exist and applies all migration scripts
     from the migrations/ directory in order.
     """
-    # Ensure workspace root exists
-    workspace_path = Path(settings.workspace_root)
-    workspace_path.mkdir(parents=True, exist_ok=True)
+    # Ensure tmp root exists
+    tmp_path = Path(settings.tmp_root)
+    tmp_path.mkdir(parents=True, exist_ok=True)
     
     db_path = get_db_path()
     

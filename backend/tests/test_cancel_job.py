@@ -20,21 +20,32 @@ from app.job_manager import JobManager
 
 @pytest.fixture
 async def temp_workspace():
-    """Create a temporary workspace for testing."""
+    """
+    Create temporary workspace + tmp_root directories for testing.
+
+    sessions/ and jobs/ are ephemeral (tmp_root); custom_profiles/ is
+    persistent (workspace_root) — see config.py's tmp_root docstring.
+    """
     with tempfile.TemporaryDirectory() as tmpdir:
-        workspace = Path(tmpdir)
-        
-        # Create required subdirectories
-        (workspace / "sessions").mkdir()
-        (workspace / "jobs").mkdir()
+        root = Path(tmpdir)
+        workspace = root / "workspace"
+        tmp_root = root / "tmp"
+
+        workspace.mkdir()
         (workspace / "custom_profiles").mkdir()
-        
-        yield workspace
+        tmp_root.mkdir()
+        (tmp_root / "sessions").mkdir()
+        (tmp_root / "jobs").mkdir()
+
+        yield root
 
 
 @pytest.fixture
 async def test_config(temp_workspace):
     """Create test configuration."""
+    workspace = temp_workspace / "workspace"
+    tmp_root = temp_workspace / "tmp"
+
     # Create a fake OrcaSlicer directory structure
     fake_orca_dir = temp_workspace / "orca-slicer"
     fake_build_dir = fake_orca_dir / "build" / "linux"
@@ -48,7 +59,8 @@ async def test_config(temp_workspace):
     profiles_dir.mkdir(parents=True)
     
     import os
-    os.environ["WORKSPACE_ROOT"] = str(temp_workspace)
+    os.environ["WORKSPACE_ROOT"] = str(workspace)
+    os.environ["TMP_ROOT"] = str(tmp_root)
     os.environ["ORCA_CLI_PATH"] = str(fake_cli_path)
     os.environ["API_SECRET"] = "changeme"
     os.environ["MAX_CONCURRENT_JOBS"] = "2"
@@ -57,7 +69,7 @@ async def test_config(temp_workspace):
     yield
     
     # Cleanup
-    for key in ["WORKSPACE_ROOT", "ORCA_CLI_PATH", "API_SECRET", "MAX_CONCURRENT_JOBS", "JOB_TIMEOUT_SECONDS"]:
+    for key in ["WORKSPACE_ROOT", "TMP_ROOT", "ORCA_CLI_PATH", "API_SECRET", "MAX_CONCURRENT_JOBS", "JOB_TIMEOUT_SECONDS"]:
         if key in os.environ:
             del os.environ[key]
 

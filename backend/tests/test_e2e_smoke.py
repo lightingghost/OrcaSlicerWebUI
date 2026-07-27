@@ -200,8 +200,13 @@ def e2e_workspace(tmp_path):
     }
     (filament_dir / "generic_pla.json").write_text(json.dumps(filament_profile))
     
-    # Set environment variables
+    # Set environment variables. TMP_ROOT points at the same directory as
+    # WORKSPACE_ROOT here (the sessions/jobs subdirs created above are
+    # shared) since this smoke test only cares about end-to-end wiring,
+    # not the persistent/ephemeral split itself — see config.py's
+    # tmp_root docstring.
     os.environ["WORKSPACE_ROOT"] = str(workspace)
+    os.environ["TMP_ROOT"] = str(workspace)
     os.environ["ORCA_CLI_PATH"] = str(fake_cli)
     os.environ["API_SECRET"] = "e2e_test_secret_key_12345"
     os.environ["MAX_CONCURRENT_JOBS"] = "2"
@@ -217,7 +222,7 @@ def e2e_workspace(tmp_path):
     }
     
     # Cleanup environment
-    for key in ["WORKSPACE_ROOT", "ORCA_CLI_PATH", "API_SECRET", "MAX_CONCURRENT_JOBS", "JOB_TIMEOUT_SECONDS"]:
+    for key in ["WORKSPACE_ROOT", "TMP_ROOT", "ORCA_CLI_PATH", "API_SECRET", "MAX_CONCURRENT_JOBS", "JOB_TIMEOUT_SECONDS"]:
         if key in os.environ:
             del os.environ[key]
 

@@ -36,9 +36,10 @@ def mock_auth_module():
 @pytest.fixture
 def mock_workspace_init():
     """
-    Prevent lifespan's `settings.init_user_workspace()` call from creating
-    real directories. The default settings singleton points workspace_root
-    at /app/workspace (production default), which this dev/test
+    Prevent lifespan's `settings.init_user_workspace()` /
+    `settings.init_tmp_workspace()` calls from creating real directories.
+    The default settings singleton points workspace_root at /app/workspace
+    and tmp_root at /app/tmp (production defaults), which this dev/test
     environment has no write permission for — without this mock, every
     lifespan-triggering test fails with PermissionError before it even
     gets to the behavior under test.
@@ -49,7 +50,8 @@ def mock_workspace_init():
     instance attribute that doesn't already exist on that instance.
     """
     from app.config import Settings
-    with patch.object(Settings, "init_user_workspace"):
+    with patch.object(Settings, "init_user_workspace"), \
+         patch.object(Settings, "init_tmp_workspace"):
         yield
 
 
@@ -100,11 +102,14 @@ def test_health_endpoint_healthy(test_client, tmp_path):
     cli_path.touch()
     workspace_path = tmp_path / "workspace"
     workspace_path.mkdir()
+    tmp_root_path = tmp_path / "tmp"
+    tmp_root_path.mkdir()
     
     # Patch settings in the config module where it's imported from
     with patch("app.config.settings") as mock_settings:
         mock_settings.orca_cli_path = str(cli_path)
         mock_settings.workspace_root = str(workspace_path)
+        mock_settings.tmp_root = str(tmp_root_path)
         
         response = test_client.get("/health")
     
@@ -116,6 +121,8 @@ def test_health_endpoint_healthy(test_client, tmp_path):
     assert data["workspace_accessible"] is True
     assert data["cli_path"] == str(cli_path)
     assert data["workspace_root"] == str(workspace_path)
+    assert data["tmp_accessible"] is True
+    assert data["tmp_root"] == str(tmp_root_path)
 
 
 def test_health_endpoint_degraded_missing_cli(test_client, tmp_path):
@@ -126,11 +133,14 @@ def test_health_endpoint_degraded_missing_cli(test_client, tmp_path):
     """
     workspace_path = tmp_path / "workspace"
     workspace_path.mkdir()
+    tmp_root_path = tmp_path / "tmp"
+    tmp_root_path.mkdir()
     
     # Patch settings in the config module where it's imported from
     with patch("app.config.settings") as mock_settings:
         mock_settings.orca_cli_path = "/nonexistent/orca-slicer"
         mock_settings.workspace_root = str(workspace_path)
+        mock_settings.tmp_root = str(tmp_root_path)
         
         response = test_client.get("/health")
     
@@ -140,6 +150,7 @@ def test_health_endpoint_degraded_missing_cli(test_client, tmp_path):
     assert data["status"] == "degraded"
     assert data["cli_available"] is False
     assert data["workspace_accessible"] is True
+    assert data["tmp_accessible"] is True
 
 
 def test_health_endpoint_degraded_missing_workspace(test_client, tmp_path):
@@ -150,11 +161,14 @@ def test_health_endpoint_degraded_missing_workspace(test_client, tmp_path):
     """
     cli_path = tmp_path / "orca-slicer"
     cli_path.touch()
+    tmp_root_path = tmp_path / "tmp"
+    tmp_root_path.mkdir()
     
     # Patch settings in the config module where it's imported from
     with patch("app.config.settings") as mock_settings:
         mock_settings.orca_cli_path = str(cli_path)
         mock_settings.workspace_root = "/nonexistent/workspace"
+        mock_settings.tmp_root = str(tmp_root_path)
         
         response = test_client.get("/health")
     

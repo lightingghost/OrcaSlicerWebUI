@@ -27,6 +27,7 @@ def client(tmp_path, monkeypatch):
     """
     monkeypatch.setenv("USER_WORKSPACE", str(tmp_path / "user_workspace"))
     monkeypatch.setenv("WORKSPACE_ROOT", str(tmp_path / "workspace"))
+    monkeypatch.setenv("TMP_ROOT", str(tmp_path / "tmp"))
     monkeypatch.setenv("API_SECRET", "test-secret-12345")
 
     # Reset the settings singleton so it re-reads the env vars just set,
@@ -290,6 +291,7 @@ def upload_client(tmp_path, monkeypatch):
     """
     monkeypatch.setenv("USER_WORKSPACE", str(tmp_path / "user_workspace"))
     monkeypatch.setenv("WORKSPACE_ROOT", str(tmp_path / "workspace"))
+    monkeypatch.setenv("TMP_ROOT", str(tmp_path / "tmp"))
     monkeypatch.setenv("API_SECRET", "test-secret-12345")
 
     import app.config as config_module
@@ -313,7 +315,7 @@ def _seed_completed_job_with_gcode(tmp_path, job_id: str, gcode_content: bytes =
     import aiosqlite
     from app.database import get_db_path
 
-    output_dir = tmp_path / "workspace" / "jobs" / job_id / "output"
+    output_dir = tmp_path / "tmp" / "jobs" / job_id / "output"
     output_dir.mkdir(parents=True, exist_ok=True)
     gcode_path = output_dir / "plate_1.gcode"
     gcode_path.write_bytes(gcode_content)
@@ -496,7 +498,7 @@ def test_upload_job_to_printer_rejects_incomplete_job(upload_client, tmp_path):
     import aiosqlite
     from app.database import get_db_path
 
-    output_dir = tmp_path / "workspace" / "jobs" / "job-running" / "output"
+    output_dir = tmp_path / "tmp" / "jobs" / "job-running" / "output"
     output_dir.mkdir(parents=True, exist_ok=True)
 
     async def _insert():
@@ -528,7 +530,7 @@ def test_upload_job_to_printer_rejects_job_with_no_gcode(upload_client, tmp_path
     import aiosqlite
     from app.database import get_db_path
 
-    output_dir = tmp_path / "workspace" / "jobs" / "job-3mf" / "output"
+    output_dir = tmp_path / "tmp" / "jobs" / "job-3mf" / "output"
     output_dir.mkdir(parents=True, exist_ok=True)
 
     async def _insert():

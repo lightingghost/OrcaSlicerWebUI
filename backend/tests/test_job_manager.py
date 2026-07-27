@@ -138,6 +138,7 @@ def test_config(temp_workspace):
     return Settings(
         orca_cli_path=fake_cli_path,
         workspace_root=temp_workspace,
+        tmp_root=temp_workspace,
         max_concurrent_jobs=2,
         job_timeout_seconds=60,  # Minimum allowed value
         output_retention_seconds=3600,

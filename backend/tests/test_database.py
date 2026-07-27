@@ -66,21 +66,21 @@ class TestDatabase:
         from app.database import init_db, get_db_path
 
         with patch("app.database.settings") as mock_settings:
-            mock_settings.workspace_root = str(tmp_path)
+            mock_settings.tmp_root = str(tmp_path)
             await init_db()
 
         with patch("app.database.settings") as mock_settings:
-            mock_settings.workspace_root = str(tmp_path)
+            mock_settings.tmp_root = str(tmp_path)
             db_path = get_db_path()
 
         assert db_path.exists()
 
-    async def test_get_db_path_uses_workspace_root(self, tmp_path: Path):
-        """get_db_path() must return a path inside workspace_root."""
+    async def test_get_db_path_uses_tmp_root(self, tmp_path: Path):
+        """get_db_path() must return a path inside tmp_root (ephemeral)."""
         from app.database import get_db_path
 
         with patch("app.database.settings") as mock_settings:
-            mock_settings.workspace_root = str(tmp_path)
+            mock_settings.tmp_root = str(tmp_path)
             db_path = get_db_path()
 
         assert str(tmp_path) in str(db_path)

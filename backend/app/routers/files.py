@@ -331,10 +331,11 @@ async def download_file(
     # Step 2: Apply resolve_and_guard to prevent path traversal
     # The file should be within the session uploads directory
     try:
-        # Verify the storage path is within workspace root
+        # Verify the storage path is within tmp root (uploaded files are
+        # ephemeral session data — see config.py's tmp_root docstring)
         file_path = resolve_and_guard(
-            storage_path.relative_to(settings.workspace_root),
-            settings.workspace_root
+            storage_path.relative_to(settings.tmp_root),
+            settings.tmp_root
         )
     except (ValueError, OSError) as e:
         # Path traversal attempt detected or invalid path

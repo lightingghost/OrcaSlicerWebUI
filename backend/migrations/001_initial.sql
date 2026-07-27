@@ -7,7 +7,7 @@ CREATE TABLE IF NOT EXISTS files (
     original_name TEXT NOT NULL,
     extension     TEXT NOT NULL CHECK (extension IN ('stl','3mf','obj','amf','json')),
     size_bytes    INTEGER NOT NULL,
-    storage_path  TEXT NOT NULL,             -- absolute path within workspace_root
+    storage_path  TEXT NOT NULL,             -- absolute path within tmp_root (ephemeral)
     uploaded_at   TEXT NOT NULL              -- ISO-8601 UTC
 );
 
@@ -25,7 +25,7 @@ CREATE TABLE IF NOT EXISTS jobs (
     cli_args        TEXT NOT NULL,           -- JSON-encoded list[str]
     exit_code       INTEGER,
     error_message   TEXT,
-    output_dir      TEXT NOT NULL            -- absolute path within workspace_root
+    output_dir      TEXT NOT NULL            -- absolute path within tmp_root (ephemeral)
 );
 
 CREATE INDEX IF NOT EXISTS idx_jobs_session_submitted ON jobs(session_id, submitted_at DESC);

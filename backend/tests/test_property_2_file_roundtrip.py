@@ -72,9 +72,14 @@ def test_client_workspace(tmp_path):
     
     workspace = tmp_path / "workspace"
     workspace.mkdir(exist_ok=True)
+    tmp_root = tmp_path / "tmp"
+    tmp_root.mkdir(exist_ok=True)
     
-    # Set environment variables
+    # Set environment variables. Uploaded files live under TMP_ROOT
+    # (ephemeral session storage — see config.py's tmp_root docstring),
+    # not WORKSPACE_ROOT.
     os.environ["WORKSPACE_ROOT"] = str(workspace)
+    os.environ["TMP_ROOT"] = str(tmp_root)
     os.environ["API_SECRET"] = "test_secret_prop2_xyz"
     os.environ["ORCA_CLI_PATH"] = "/tmp/fake_cli_prop2"
     
@@ -99,10 +104,10 @@ def test_client_workspace(tmp_path):
         # initialized" since `verify_token` depends on `init_auth`
         # having run.
         with TestClient(app) as client:
-            yield (client, workspace)
+            yield (client, tmp_root)
     finally:
         # Cleanup environment variables
-        for key in ["WORKSPACE_ROOT", "API_SECRET", "ORCA_CLI_PATH"]:
+        for key in ["WORKSPACE_ROOT", "TMP_ROOT", "API_SECRET", "ORCA_CLI_PATH"]:
             if key in os.environ:
                 del os.environ[key]
 

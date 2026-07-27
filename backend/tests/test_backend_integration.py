@@ -124,8 +124,13 @@ def temp_workspace(tmp_path):
     (workspace / "jobs").mkdir()
     (workspace / "custom_profiles").mkdir()
     
-    # Set environment variables
+    # Set environment variables. TMP_ROOT is pointed at the same
+    # directory as WORKSPACE_ROOT here (sessions/jobs subdirs already
+    # created above are shared) since this test only cares that a job's
+    # output_dir resolves consistently, not about the persistent/
+    # ephemeral split itself — see config.py's tmp_root docstring.
     os.environ["WORKSPACE_ROOT"] = str(workspace)
+    os.environ["TMP_ROOT"] = str(workspace)
     os.environ["API_SECRET"] = "test_secret_12345678"
     
     # Mock CLI path - we'll skip actual CLI execution in this test
@@ -138,7 +143,7 @@ def temp_workspace(tmp_path):
     yield workspace
     
     # Cleanup
-    for key in ["WORKSPACE_ROOT", "API_SECRET", "ORCA_CLI_PATH"]:
+    for key in ["WORKSPACE_ROOT", "TMP_ROOT", "API_SECRET", "ORCA_CLI_PATH"]:
         if key in os.environ:
             del os.environ[key]
 

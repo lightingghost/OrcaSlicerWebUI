@@ -226,6 +226,7 @@ COPY --from=frontend-build /app/dist /app/frontend/dist
 
 ENV ORCA_CLI_PATH=/app/squashfs-root/bin/orca-slicer \
     WORKSPACE_ROOT=/app/workspace \
+    TMP_ROOT=/app/tmp \
     USER_WORKSPACE=/app/workspace/user_configs \
     STATIC_DIR=/app/frontend/dist \
     MAX_CONCURRENT_JOBS=4 \
@@ -234,7 +235,11 @@ ENV ORCA_CLI_PATH=/app/squashfs-root/bin/orca-slicer \
     JOB_RECORD_RETENTION_SECONDS=604800 \
     API_SECRET=changeme
 
-RUN mkdir -p /app/workspace
+# /app/workspace holds PERSISTENT data (user configs/autosaves/custom
+# profiles) — back it with a durable Docker volume.
+# /app/tmp holds EPHEMERAL data (session uploads, job outputs, sqlite db)
+# — safe to back with tmpfs (see docker-compose.yml).
+RUN mkdir -p /app/workspace /app/tmp
 
 EXPOSE 8080
 

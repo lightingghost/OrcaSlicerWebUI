@@ -11,27 +11,41 @@
  * each other.
  *
  * On mount: loads any saved project autosave and re-adds every file
- * (by file_id — files are never deleted by backend retention cleanup,
- * see cleanup.py, so a saved file_id remains valid indefinitely) to
- * uploadedFiles, queuing each one's saved placement in
+ * (by file_id) to uploadedFiles, queuing each one's saved placement in
  * pendingInitialTransforms for ThreeViewport to apply once loaded —
  * exactly the same mechanism importProject uses (see projectSlice.ts),
  * just fed from a stored autosave instead of a freshly-imported .3mf.
  *
- * On an interval (every 3s) while there's anything on the plate: captures
- * the live snapshot via getPlateSnapshot and saves it alongside the
- * current uploadedFiles list. A periodic poll — rather than a debounced
- * effect keyed on some piece of store state — is necessary because
- * object position/rotation/scale edits (drag, the Move/Rotate/Scale
- * tool, Arrange, Lay on Face, Auto Orient) mutate the Three.js scene's
- * mesh transforms DIRECTLY and are never mirrored into Zustand (see
- * MainArea.tsx's doc comment on why) — there is no store field whose
- * change could debounce off of for "the plate moved". Uploading/removing
- * files (which DOES go through the store, via uploadedFiles) is also
- * covered by this same interval rather than a separate more-responsive
- * path, since losing at most ~3s of edits on an unexpected tab close is
- * an acceptable tradeoff for not having to instrument every transform
- * call site in ThreeViewport with an explicit "plate changed" signal.
+ * Uploaded files live under TMP_ROOT (ephemeral — see backend
+ * config.py's tmp_root docstring), which is wiped on server restart,
+ * while this autosave itself lives under the persistent USER_WORKSPACE.
+ * So a restored file_id is NOT guaranteed to still exist server-side —
+ * each one is verified with a HEAD-like GET /api/files/{id} before being
+ * re-added; ones that 404 are dropped (and, if any were dropped, the
+ * autosave is immediately rewritten without them so the 3s save loop
+ * doesn't keep resubmitting dead file_ids to /api/projects/autosave and
+ * looping on 422s).
+ *
+ * Saving is change-driven, not time-driven: a cheap in-memory poll (every
+ * POLL_INTERVAL_MS, no network) compares the live plate's signature
+ * (uploadedFiles + each object's live position/rotation/scale) against
+ * the last-checked one. A poll — rather than a debounced effect keyed on
+ * some piece of store state — is necessary because object position/
+ * rotation/scale edits (drag, the Move/Rotate/Scale tool, Arrange, Lay on
+ * Face, Auto Orient) mutate the Three.js scene's mesh transforms
+ * DIRECTLY and are never mirrored into Zustand (see MainArea.tsx's doc
+ * comment on why) — there is no store field whose change a normal
+ * useEffect dependency array could react to.
+ *
+ * Only once the signature has been unchanged for DEBOUNCE_MS does an
+ * actual save request fire (mirroring ConfigAutoSave.tsx's own
+ * debounced-save pattern), and the save-succeeded signature is then
+ * remembered so an unchanged plate produces zero network requests on
+ * every subsequent poll tick — this is also what stops a save that the
+ * backend rejects (e.g. a stale file_id — see projects.py's
+ * autosave_project) from being retried forever: it's attempted exactly
+ * once per distinct plate state, not resubmitted every tick until the
+ * plate actually changes again.
  */
 
 import { useEffect, useRef } from 'react';
@@ -45,17 +59,51 @@ interface ProjectAutosavePayload {
   placements: Record<string, PlateObjectPlacement>;
 }
 
+// How often to poll the (unmirrored, see this file's doc comment) live
+// scene state for changes. Pure in-memory comparison, no network — cheap
+// enough to run this frequently without concern.
+const POLL_INTERVAL_MS = 1000;
+// Once a change is detected, wait this long without a FURTHER change
+// before actually saving — mirrors ConfigAutoSave.tsx's debounce pattern,
+// so a drag-in-progress or a burst of edits collapses into one save
+// instead of one per poll tick.
+const DEBOUNCE_MS = 2000;
+
+/** Cheap string fingerprint of "what's on the plate and where", used to
+ * detect whether anything actually changed since the last poll tick —
+ * order-sensitive is fine since uploadedFiles order only changes when
+ * files are added/removed/reordered, which IS a real change worth saving. */
+function computePlateSignature(
+  files: UploadedFile[],
+  placements: Record<string, PlateObjectPlacement>
+): string {
+  return files
+    .map((f) => {
+      const p = placements[f.file_id];
+      return p
+        ? `${f.file_id}:${p.x},${p.y},${p.z},${p.qx},${p.qy},${p.qz},${p.qw},${p.sx},${p.sy},${p.sz}`
+        : `${f.file_id}:none`;
+    })
+    .join('|');
+}
+
 export const ProjectAutoSave: React.FC = () => {
   const hasLoadedRef = useRef(false);
   const isLoadingRef = useRef(false);
-  // Tracks whether the LAST tick already had an empty plate, so the
-  // empty-plate branch below only calls deleteAutosave once per
-  // transition to empty, instead of firing a DELETE request every 3s
-  // forever while the plate stays empty (observed: dozens of repeated
-  // "DELETE /api/autosave/project → 200" log lines with nothing on the
-  // plate — harmless to correctness but a pointless steady drip of
-  // requests every 3 seconds for as long as the tab stays open empty).
-  const wasEmptyRef = useRef(false);
+  // Signature of the plate state as of the last poll tick — used to
+  // detect "did anything change since we last looked". Starts as a
+  // sentinel that can never equal a real signature (including the empty
+  // one, `''`) so the very first poll tick always runs its comparison
+  // logic rather than assuming "unchanged".
+  const lastSeenSignatureRef = useRef<string | null>(null);
+  // Signature of the plate state as of the last successful (or
+  // last-attempted — see debounced save effect) save. Comparing against
+  // THIS, not lastSeenSignatureRef, is what stops a save the backend
+  // rejects (e.g. a stale file_id — see projects.py's autosave_project)
+  // from being retried every poll tick forever: it's attempted once per
+  // distinct signature, not once per tick.
+  const lastSavedSignatureRef = useRef<string | null>(null);
+  const debounceTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
 
   // ── 1. Restore the saved project on mount ───────────────────────────────
   useEffect(() => {
@@ -64,27 +112,93 @@ export const ProjectAutoSave: React.FC = () => {
 
     apiClient
       .getAutosave('project')
-      .then((raw) => {
+      .then(async (raw) => {
         const payload = raw as unknown as ProjectAutosavePayload;
-        if (!payload || !Array.isArray(payload.files) || payload.files.length === 0) return;
+        if (!payload || !Array.isArray(payload.files) || payload.files.length === 0) {
+          // Nothing to restore — seed both signatures as "empty" so
+          // effect 2's poll doesn't immediately fire a pointless
+          // deleteAutosave for a plate that was already empty (there's
+          // nothing on disk to clear in the first place).
+          lastSeenSignatureRef.current = '';
+          lastSavedSignatureRef.current = '';
+          return;
+        }
+
+        // Verify each restored file still exists server-side (uploads
+        // live under ephemeral TMP_ROOT and don't survive a restart —
+        // see this component's doc comment). Clones (is_clone) share
+        // their source file's geometry rather than being their own
+        // upload, so check source_file_id, not file_id, for them.
+        const checkedIds = new Map<string, boolean>();
+        const checkExists = async (id: string): Promise<boolean> => {
+          if (checkedIds.has(id)) return checkedIds.get(id)!;
+          const exists = await apiClient
+            .getFile(id)
+            .then(() => true)
+            .catch(() => false);
+          checkedIds.set(id, exists);
+          return exists;
+        };
+
+        const survivingFiles: UploadedFile[] = [];
+        for (const file of payload.files) {
+          if (await checkExists(file.source_file_id)) {
+            survivingFiles.push(file);
+          }
+        }
+
+        const droppedAny = survivingFiles.length !== payload.files.length;
 
         useStore.setState((state) => {
           const nextTransforms = new Map(state.pendingInitialTransforms);
-          for (const file of payload.files) {
+          for (const file of survivingFiles) {
             const placement = payload.placements?.[file.file_id];
             if (placement) {
               nextTransforms.set(file.file_id, placement);
             }
           }
           return {
-            uploadedFiles: payload.files,
+            uploadedFiles: survivingFiles,
             pendingInitialTransforms: nextTransforms,
           };
         });
+
+        const survivingPlacements: Record<string, PlateObjectPlacement> = {};
+        for (const file of survivingFiles) {
+          const placement = payload.placements?.[file.file_id];
+          if (placement) survivingPlacements[file.file_id] = placement;
+        }
+        const survivingSignature = computePlateSignature(survivingFiles, survivingPlacements);
+
+        if (droppedAny) {
+          // Rewrite (or clear) the autosave immediately so effect 2's
+          // poll doesn't keep resubmitting now-dead file_ids to
+          // /api/projects/autosave and looping on 422s.
+          if (survivingFiles.length === 0) {
+            await apiClient.deleteAutosave('project').catch(() => {});
+          } else {
+            const prunedPayload: ProjectAutosavePayload = {
+              files: survivingFiles,
+              placements: survivingPlacements,
+            };
+            await apiClient
+              .saveAutosave('project', prunedPayload as unknown as Record<string, unknown>)
+              .catch(() => {});
+          }
+        }
+
+        // Seed both signatures with what's now actually on disk, so
+        // effect 2's poll treats the just-restored plate as "already
+        // saved" and doesn't immediately re-save it (or the pruned
+        // version of it) again on its very first tick.
+        lastSeenSignatureRef.current = survivingSignature;
+        lastSavedSignatureRef.current = survivingSignature;
       })
       .catch(() => {
         // No autosave yet (404) or it failed to load — start with an
         // empty plate rather than blocking app startup.
+        lastSeenSignatureRef.current = '';
+        lastSavedSignatureRef.current = '';
       })
       .finally(() => {
         hasLoadedRef.current = true;
@@ -92,29 +206,34 @@ export const ProjectAutoSave: React.FC = () => {
       });
   }, []);
 
-  // ── 2. Auto-save the plate every 3s ─────────────────────────────────────
-  // Reads uploadedFiles/getPlateSnapshot fresh from the store on each tick
-  // (via useStore.getState(), not the reactive selectors above) so the
-  // interval itself never needs to be torn down and recreated just
-  // because uploadedFiles changed — it only needs to be set up once.
+  // ── 2. Save whenever the plate actually changes (debounced) ─────────────
+  // Polls the live scene every POLL_INTERVAL_MS (cheap, in-memory, no
+  // network — see this file's doc comment for why a poll is necessary at
+  // all) purely to compute computePlateSignature and compare it against
+  // lastSeenSignatureRef. Only a CHANGE restarts the debounce timer; an
+  // unchanged plate does nothing on a given tick, and a plate that's
+  // already been saved (lastSavedSignatureRef) never re-fires the network
+  // request even if the debounce timer were somehow retriggered — this
+  // is what eliminates the constant "200 / 422 every 3s" log spam for an
+  // idle plate.
   useEffect(() => {
-    const intervalId = setInterval(() => {
-      if (!hasLoadedRef.current) return;
+    const clearDebounce = () => {
+      if (debounceTimerRef.current) {
+        clearTimeout(debounceTimerRef.current);
+        debounceTimerRef.current = null;
+      }
+    };
+
+    const performSave = (signature: string) => {
+      if (signature === lastSavedSignatureRef.current) return;
+      lastSavedSignatureRef.current = signature;
+
       const { uploadedFiles: currentFiles, getPlateSnapshot: currentGetSnapshot } = useStore.getState();
 
       if (currentFiles.length === 0) {
-        // Nothing to save — clear any stale autosave from a previous
-        // session instead of leaving a payload that would resurrect
-        // objects the user deliberately removed (e.g. via New Project).
-        // Only fire this once per empty-plate transition (see
-        // wasEmptyRef's doc comment) rather than every tick forever.
-        if (!wasEmptyRef.current) {
-          wasEmptyRef.current = true;
-          apiClient.deleteAutosave('project').catch(() => {});
-        }
+        apiClient.deleteAutosave('project').catch(() => {});
         return;
       }
-      wasEmptyRef.current = false;
       if (!currentGetSnapshot) return;
 
       const snapshot = currentGetSnapshot();
@@ -145,9 +264,42 @@ export const ProjectAutoSave: React.FC = () => {
       autosaveProjectAs3mf(snapshot).catch((err) =>
         console.error('Project .3mf autosave failed:', err)
       );
-    }, 3000);
+    };
 
-    return () => clearInterval(intervalId);
+    const intervalId = setInterval(() => {
+      if (!hasLoadedRef.current) return;
+      const { uploadedFiles: currentFiles, getPlateSnapshot: currentGetSnapshot } = useStore.getState();
+
+      const placements: Record<string, PlateObjectPlacement> = {};
+      if (currentFiles.length > 0 && currentGetSnapshot) {
+        const snapshot = currentGetSnapshot();
+        for (const entry of snapshot) {
+          placements[entry.file_id] = {
+            x: entry.x, y: entry.y, z: entry.z,
+            qx: entry.qx, qy: entry.qy, qz: entry.qz, qw: entry.qw,
+            sx: entry.sx, sy: entry.sy, sz: entry.sz,
+          };
+        }
+      }
+
+      const currentSignature = computePlateSignature(currentFiles, placements);
+      if (currentSignature === lastSeenSignatureRef.current) return;
+
+      // Something changed since the last tick — (re)start the debounce
+      // timer rather than saving immediately, so a drag-in-progress or a
+      // burst of edits collapses into a single save DEBOUNCE_MS after
+      // the LAST change, not one save per tick while changes keep coming.
+      lastSeenSignatureRef.current = currentSignature;
+      clearDebounce();
+      debounceTimerRef.current = setTimeout(() => {
+        performSave(currentSignature);
+      }, DEBOUNCE_MS);
+    }, POLL_INTERVAL_MS);
+
+    return () => {
+      clearInterval(intervalId);
+      clearDebounce();
+    };
   }, []);
 
   return null;

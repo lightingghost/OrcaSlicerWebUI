@@ -656,6 +656,7 @@ def test_property_1_invalid_extension_returns_422():
             # Configure mock settings to use our temp workspace
             mock_config = MagicMock()
             mock_config.workspace_root = workspace_path
+            mock_config.tmp_root = workspace_path
             mock_config.api_secret = "test-secret-12345"
             mock_config.orca_cli_path = "/tmp/fake_cli"
             mock_config.max_concurrent_jobs = 4

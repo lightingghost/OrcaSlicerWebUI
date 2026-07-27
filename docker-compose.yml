@@ -4,6 +4,20 @@
 # The OrcaSlicer CLI (extracted from the pinned AppImage release) is baked
 # into the image at build time — no host bind-mount required.
 #
+# Storage is split into two roots (see backend/app/config.py's Settings
+# docstring):
+#   /app/workspace  PERSISTENT — user configs, autosaves, custom profiles.
+#                   Backed by the named `workspace` volume so it survives
+#                   container restarts/recreations.
+#   /app/tmp        EPHEMERAL — session uploads, job outputs (gcode/3mf/
+#                   logs), and the sqlite job/file-metadata db. Backed by
+#                   tmpfs (in-memory) since nothing here needs to survive
+#                   a restart; this also keeps repeated slice-job I/O off
+#                   the host disk. Size the tmpfs to fit your largest
+#                   expected concurrent uploads/outputs — the default
+#                   below (2 GiB) may need to be raised for large models
+#                   or many concurrent jobs, and requires enough host RAM.
+#
 # Build with:
 #   docker compose --env-file build.env build
 #   docker compose --env-file build.env up -d
@@ -25,6 +39,8 @@ services:
       - API_SECRET=${API_SECRET:-changeme}
     volumes:
       - workspace:/app/workspace
+    tmpfs:
+      - /app/tmp:size=512m
     restart: unless-stopped
 
 volumes:

@@ -99,8 +99,8 @@ class MockConfig:
     
     def __init__(self, tmp_path: Path):
         self.orca_cli_path = Path("/usr/bin/orca-slicer")
-        self.workspace_root = tmp_path / "workspace"
-        self.workspace_root.mkdir(exist_ok=True)
+        self.tmp_root = tmp_path / "tmp"
+        self.tmp_root.mkdir(exist_ok=True)
         self.profiles_root = tmp_path / "profiles"
         self.profiles_root.mkdir(exist_ok=True)
 
@@ -111,9 +111,9 @@ class TestBuildCliArgsBasic:
     def test_minimal_job_request(self, tmp_path):
         """Minimal job with only required fields should produce valid args."""
         config = MockConfig(tmp_path)
-        session_dir = config.workspace_root / "sessions" / "session123"
+        session_dir = config.tmp_root / "sessions" / "session123"
         session_dir.mkdir(parents=True)
-        output_dir = config.workspace_root / "jobs" / "job456" / "output"
+        output_dir = config.tmp_root / "jobs" / "job456" / "output"
         output_dir.mkdir(parents=True)
         
         # Create a mock uploaded file (real uploads live under uploads/, not
@@ -141,9 +141,9 @@ class TestBuildCliArgsBasic:
     def test_multiple_input_files(self, tmp_path):
         """Job with multiple input files should include all files."""
         config = MockConfig(tmp_path)
-        session_dir = config.workspace_root / "sessions" / "session123"
+        session_dir = config.tmp_root / "sessions" / "session123"
         session_dir.mkdir(parents=True)
-        output_dir = config.workspace_root / "jobs" / "job456" / "output"
+        output_dir = config.tmp_root / "jobs" / "job456" / "output"
         output_dir.mkdir(parents=True)
         
         # Create multiple files
@@ -174,9 +174,9 @@ class TestBuildCliArgsActions:
     def test_slice_action_with_plate(self, tmp_path):
         """Slice action with specific plate number."""
         config = MockConfig(tmp_path)
-        session_dir = config.workspace_root / "sessions" / "s1"
+        session_dir = config.tmp_root / "sessions" / "s1"
         session_dir.mkdir(parents=True)
-        output_dir = config.workspace_root / "jobs" / "j1" / "output"
+        output_dir = config.tmp_root / "jobs" / "j1" / "output"
         output_dir.mkdir(parents=True)
         
         job = {
@@ -194,9 +194,9 @@ class TestBuildCliArgsActions:
     def test_export_3mf_action(self, tmp_path):
         """Export 3MF action should use correct flag."""
         config = MockConfig(tmp_path)
-        session_dir = config.workspace_root / "sessions" / "s1"
+        session_dir = config.tmp_root / "sessions" / "s1"
         session_dir.mkdir(parents=True)
-        output_dir = config.workspace_root / "jobs" / "j1" / "output"
+        output_dir = config.tmp_root / "jobs" / "j1" / "output"
         output_dir.mkdir(parents=True)
         
         job = {
@@ -210,9 +210,9 @@ class TestBuildCliArgsActions:
     def test_export_settings_action(self, tmp_path):
         """Export settings action should use correct flag."""
         config = MockConfig(tmp_path)
-        session_dir = config.workspace_root / "sessions" / "s1"
+        session_dir = config.tmp_root / "sessions" / "s1"
         session_dir.mkdir(parents=True)
-        output_dir = config.workspace_root / "jobs" / "j1" / "output"
+        output_dir = config.tmp_root / "jobs" / "j1" / "output"
         output_dir.mkdir(parents=True)
         
         job = {
@@ -230,9 +230,9 @@ class TestBuildCliArgsProfiles:
     def test_printer_profile(self, tmp_path):
         """Printer profile should appear with --load_settings."""
         config = MockConfig(tmp_path)
-        session_dir = config.workspace_root / "sessions" / "s1"
+        session_dir = config.tmp_root / "sessions" / "s1"
         session_dir.mkdir(parents=True)
-        output_dir = config.workspace_root / "jobs" / "j1" / "output"
+        output_dir = config.tmp_root / "jobs" / "j1" / "output"
         output_dir.mkdir(parents=True)
         
         # Create profile file
@@ -258,9 +258,9 @@ class TestBuildCliArgsProfiles:
     def test_process_profile(self, tmp_path):
         """Process profile should appear with --load-settings."""
         config = MockConfig(tmp_path)
-        session_dir = config.workspace_root / "sessions" / "s1"
+        session_dir = config.tmp_root / "sessions" / "s1"
         session_dir.mkdir(parents=True)
-        output_dir = config.workspace_root / "jobs" / "j1" / "output"
+        output_dir = config.tmp_root / "jobs" / "j1" / "output"
         output_dir.mkdir(parents=True)
         
         # Create profile file
@@ -285,9 +285,9 @@ class TestBuildCliArgsProfiles:
         """Multiple filament profiles should appear as ONE --load-filaments
         flag with a semicolon-separated file list."""
         config = MockConfig(tmp_path)
-        session_dir = config.workspace_root / "sessions" / "s1"
+        session_dir = config.tmp_root / "sessions" / "s1"
         session_dir.mkdir(parents=True)
-        output_dir = config.workspace_root / "jobs" / "j1" / "output"
+        output_dir = config.tmp_root / "jobs" / "j1" / "output"
         output_dir.mkdir(parents=True)
         
         # Create profile files
@@ -318,9 +318,9 @@ class TestBuildCliArgsProfiles:
     def test_profile_path_traversal_rejected(self, tmp_path):
         """Profile paths with traversal attempts should be rejected."""
         config = MockConfig(tmp_path)
-        session_dir = config.workspace_root / "sessions" / "s1"
+        session_dir = config.tmp_root / "sessions" / "s1"
         session_dir.mkdir(parents=True)
-        output_dir = config.workspace_root / "jobs" / "j1" / "output"
+        output_dir = config.tmp_root / "jobs" / "j1" / "output"
         output_dir.mkdir(parents=True)
         
         job = {
@@ -343,9 +343,9 @@ class TestBuildCliArgsParameterOverrides:
         from its key with underscores replaced by dashes; passing the raw
         underscored key is rejected outright as an unrecognized option."""
         config = MockConfig(tmp_path)
-        session_dir = config.workspace_root / "sessions" / "s1"
+        session_dir = config.tmp_root / "sessions" / "s1"
         session_dir.mkdir(parents=True)
-        output_dir = config.workspace_root / "jobs" / "j1" / "output"
+        output_dir = config.tmp_root / "jobs" / "j1" / "output"
         output_dir.mkdir(parents=True)
         
         job = {
@@ -371,9 +371,9 @@ class TestBuildCliArgsParameterOverrides:
     def test_numeric_parameter_values(self, tmp_path):
         """Numeric parameter values should be properly formatted."""
         config = MockConfig(tmp_path)
-        session_dir = config.workspace_root / "sessions" / "s1"
+        session_dir = config.tmp_root / "sessions" / "s1"
         session_dir.mkdir(parents=True)
-        output_dir = config.workspace_root / "jobs" / "j1" / "output"
+        output_dir = config.tmp_root / "jobs" / "j1" / "output"
         output_dir.mkdir(parents=True)
         
         job = {
@@ -401,9 +401,9 @@ class TestBuildCliArgsParameterOverrides:
         Plate" in the UI never actually changed the sliced bed
         temperature, since curr_bed_type never reached the CLI)."""
         config = MockConfig(tmp_path)
-        session_dir = config.workspace_root / "sessions" / "s1"
+        session_dir = config.tmp_root / "sessions" / "s1"
         session_dir.mkdir(parents=True)
-        output_dir = config.workspace_root / "jobs" / "j1" / "output"
+        output_dir = config.tmp_root / "jobs" / "j1" / "output"
         output_dir.mkdir(parents=True)
 
         job = {
@@ -426,9 +426,9 @@ class TestBuildCliArgsTransforms:
     def test_numeric_transforms(self, tmp_path):
         """Numeric transforms should appear as --flag=value."""
         config = MockConfig(tmp_path)
-        session_dir = config.workspace_root / "sessions" / "s1"
+        session_dir = config.tmp_root / "sessions" / "s1"
         session_dir.mkdir(parents=True)
-        output_dir = config.workspace_root / "jobs" / "j1" / "output"
+        output_dir = config.tmp_root / "jobs" / "j1" / "output"
         output_dir.mkdir(parents=True)
         
         job = {
@@ -452,9 +452,9 @@ class TestBuildCliArgsTransforms:
     def test_boolean_transforms(self, tmp_path):
         """Boolean transforms should appear as flags when true."""
         config = MockConfig(tmp_path)
-        session_dir = config.workspace_root / "sessions" / "s1"
+        session_dir = config.tmp_root / "sessions" / "s1"
         session_dir.mkdir(parents=True)
-        output_dir = config.workspace_root / "jobs" / "j1" / "output"
+        output_dir = config.tmp_root / "jobs" / "j1" / "output"
         output_dir.mkdir(parents=True)
         
         job = {
@@ -476,9 +476,9 @@ class TestBuildCliArgsTransforms:
     def test_arrange_with_suboptions(self, tmp_path):
         """Arrange=1 or 2 should enable sub-options."""
         config = MockConfig(tmp_path)
-        session_dir = config.workspace_root / "sessions" / "s1"
+        session_dir = config.tmp_root / "sessions" / "s1"
         session_dir.mkdir(parents=True)
-        output_dir = config.workspace_root / "jobs" / "j1" / "output"
+        output_dir = config.tmp_root / "jobs" / "j1" / "output"
         output_dir.mkdir(parents=True)
         
         job = {
@@ -500,9 +500,9 @@ class TestBuildCliArgsTransforms:
     def test_arrange_zero_no_suboptions(self, tmp_path):
         """Arrange=0 should not enable sub-options even if they're set."""
         config = MockConfig(tmp_path)
-        session_dir = config.workspace_root / "sessions" / "s1"
+        session_dir = config.tmp_root / "sessions" / "s1"
         session_dir.mkdir(parents=True)
-        output_dir = config.workspace_root / "jobs" / "j1" / "output"
+        output_dir = config.tmp_root / "jobs" / "j1" / "output"
         output_dir.mkdir(parents=True)
         
         job = {
@@ -559,9 +559,9 @@ class TestBuildCliArgsTransformsPropertyBased:
         with tempfile.TemporaryDirectory() as tmp_dir:
             tmp_path = Path(tmp_dir)
             config = MockConfig(tmp_path)
-            session_dir = config.workspace_root / "sessions" / "s1"
+            session_dir = config.tmp_root / "sessions" / "s1"
             session_dir.mkdir(parents=True)
-            output_dir = config.workspace_root / "jobs" / "j1" / "output"
+            output_dir = config.tmp_root / "jobs" / "j1" / "output"
             output_dir.mkdir(parents=True)
             
             # Build transform options dict with only non-None values
@@ -686,9 +686,9 @@ class TestBuildCliArgsMisc:
     def test_datadir_option(self, tmp_path):
         """Datadir option should appear with path."""
         config = MockConfig(tmp_path)
-        session_dir = config.workspace_root / "sessions" / "s1"
+        session_dir = config.tmp_root / "sessions" / "s1"
         session_dir.mkdir(parents=True)
-        output_dir = config.workspace_root / "jobs" / "j1" / "output"
+        output_dir = config.tmp_root / "jobs" / "j1" / "output"
         output_dir.mkdir(parents=True)
         
         job = {
@@ -708,9 +708,9 @@ class TestBuildCliArgsMisc:
     def test_debug_level(self, tmp_path):
         """Debug level should appear as integer."""
         config = MockConfig(tmp_path)
-        session_dir = config.workspace_root / "sessions" / "s1"
+        session_dir = config.tmp_root / "sessions" / "s1"
         session_dir.mkdir(parents=True)
-        output_dir = config.workspace_root / "jobs" / "j1" / "output"
+        output_dir = config.tmp_root / "jobs" / "j1" / "output"
         output_dir.mkdir(parents=True)
         
         job = {
@@ -730,9 +730,9 @@ class TestBuildCliArgsMisc:
     def test_custom_gcodes_file(self, tmp_path):
         """Custom gcode file should be validated and included."""
         config = MockConfig(tmp_path)
-        session_dir = config.workspace_root / "sessions" / "s1"
+        session_dir = config.tmp_root / "sessions" / "s1"
         session_dir.mkdir(parents=True)
-        output_dir = config.workspace_root / "jobs" / "j1" / "output"
+        output_dir = config.tmp_root / "jobs" / "j1" / "output"
         output_dir.mkdir(parents=True)
         
         # Create custom gcode file
@@ -756,9 +756,9 @@ class TestBuildCliArgsMisc:
     def test_integer_list_options(self, tmp_path):
         """Integer list options should be comma-separated."""
         config = MockConfig(tmp_path)
-        session_dir = config.workspace_root / "sessions" / "s1"
+        session_dir = config.tmp_root / "sessions" / "s1"
         session_dir.mkdir(parents=True)
-        output_dir = config.workspace_root / "jobs" / "j1" / "output"
+        output_dir = config.tmp_root / "jobs" / "j1" / "output"
         output_dir.mkdir(parents=True)
         
         job = {
@@ -788,9 +788,9 @@ class TestBuildCliArgsMisc:
     def test_boolean_misc_options(self, tmp_path):
         """Boolean misc options should appear as flags."""
         config = MockConfig(tmp_path)
-        session_dir = config.workspace_root / "sessions" / "s1"
+        session_dir = config.tmp_root / "sessions" / "s1"
         session_dir.mkdir(parents=True)
-        output_dir = config.workspace_root / "jobs" / "j1" / "output"
+        output_dir = config.tmp_root / "jobs" / "j1" / "output"
         output_dir.mkdir(parents=True)
         
         job = {
@@ -816,9 +816,9 @@ class TestBuildCliArgsActionFlags:
     def test_action_flags(self, tmp_path):
         """Action flags should appear when set to true."""
         config = MockConfig(tmp_path)
-        session_dir = config.workspace_root / "sessions" / "s1"
+        session_dir = config.tmp_root / "sessions" / "s1"
         session_dir.mkdir(parents=True)
-        output_dir = config.workspace_root / "jobs" / "j1" / "output"
+        output_dir = config.tmp_root / "jobs" / "j1" / "output"
         output_dir.mkdir(parents=True)
         
         job = {
@@ -870,9 +870,9 @@ class TestBuildCliArgsActionsPropertyBased:
         with tempfile.TemporaryDirectory() as tmp_dir:
             tmp_path = Path(tmp_dir)
             config = MockConfig(tmp_path)
-            session_dir = config.workspace_root / "sessions" / "s1"
+            session_dir = config.tmp_root / "sessions" / "s1"
             session_dir.mkdir(parents=True)
-            output_dir = config.workspace_root / "jobs" / "j1" / "output"
+            output_dir = config.tmp_root / "jobs" / "j1" / "output"
             output_dir.mkdir(parents=True)
             
             # Build a job with the given action
@@ -943,9 +943,9 @@ class TestBuildCliArgsComplexScenarios:
     def test_full_job_with_all_options(self, tmp_path):
         """Complete job with all option types should produce valid args."""
         config = MockConfig(tmp_path)
-        session_dir = config.workspace_root / "sessions" / "s1"
+        session_dir = config.tmp_root / "sessions" / "s1"
         session_dir.mkdir(parents=True)
-        output_dir = config.workspace_root / "jobs" / "j1" / "output"
+        output_dir = config.tmp_root / "jobs" / "j1" / "output"
         output_dir.mkdir(parents=True)
         
         # Create files
@@ -993,9 +993,9 @@ class TestBuildCliArgsComplexScenarios:
     def test_shell_metacharacters_are_safe(self, tmp_path):
         """Shell metacharacters in values should not break argument list."""
         config = MockConfig(tmp_path)
-        session_dir = config.workspace_root / "sessions" / "s1"
+        session_dir = config.tmp_root / "sessions" / "s1"
         session_dir.mkdir(parents=True)
-        output_dir = config.workspace_root / "jobs" / "j1" / "output"
+        output_dir = config.tmp_root / "jobs" / "j1" / "output"
         output_dir.mkdir(parents=True)
         
         # Parameter value contains shell metacharacters
@@ -1018,9 +1018,9 @@ class TestBuildCliArgsComplexScenarios:
     def test_empty_options_sections_ignored(self, tmp_path):
         """Empty option dictionaries should not affect output."""
         config = MockConfig(tmp_path)
-        session_dir = config.workspace_root / "sessions" / "s1"
+        session_dir = config.tmp_root / "sessions" / "s1"
         session_dir.mkdir(parents=True)
-        output_dir = config.workspace_root / "jobs" / "j1" / "output"
+        output_dir = config.tmp_root / "jobs" / "j1" / "output"
         output_dir.mkdir(parents=True)
         
         job = {
@@ -1110,9 +1110,9 @@ class TestProfileFlagsPropertyTests:
         **Validates: Requirements 2.4**
         """
         config = MockConfig(tmp_path)
-        session_dir = config.workspace_root / "sessions" / f"s{run_id}"
+        session_dir = config.tmp_root / "sessions" / f"s{run_id}"
         session_dir.mkdir(parents=True, exist_ok=True)
-        output_dir = config.workspace_root / "jobs" / f"j{run_id}" / "output"
+        output_dir = config.tmp_root / "jobs" / f"j{run_id}" / "output"
         output_dir.mkdir(parents=True, exist_ok=True)
         
         # Create manufacturer directory
@@ -1262,9 +1262,9 @@ class TestParameterOverridePropertyTests:
         with tempfile.TemporaryDirectory() as tmp_dir:
             tmp_path = Path(tmp_dir)
             config = MockConfig(tmp_path)
-            session_dir = config.workspace_root / "sessions" / "s1"
+            session_dir = config.tmp_root / "sessions" / "s1"
             session_dir.mkdir(parents=True)
-            output_dir = config.workspace_root / "jobs" / "j1" / "output"
+            output_dir = config.tmp_root / "jobs" / "j1" / "output"
             output_dir.mkdir(parents=True)
             
             job = {
@@ -1333,9 +1333,9 @@ class TestParameterOverridePropertyTests:
         with tempfile.TemporaryDirectory() as tmp_dir:
             tmp_path = Path(tmp_dir)
             config = MockConfig(tmp_path)
-            session_dir = config.workspace_root / "sessions" / "s1"
+            session_dir = config.tmp_root / "sessions" / "s1"
             session_dir.mkdir(parents=True)
-            output_dir = config.workspace_root / "jobs" / "j1" / "output"
+            output_dir = config.tmp_root / "jobs" / "j1" / "output"
             output_dir.mkdir(parents=True)
             
             # Generate overrides based on num_overrides
@@ -1413,9 +1413,9 @@ class TestParameterOverridePropertyTests:
         with tempfile.TemporaryDirectory() as tmp_dir:
             tmp_path = Path(tmp_dir)
             config = MockConfig(tmp_path)
-            session_dir = config.workspace_root / "sessions" / "s1"
+            session_dir = config.tmp_root / "sessions" / "s1"
             session_dir.mkdir(parents=True)
-            output_dir = config.workspace_root / "jobs" / "j1" / "output"
+            output_dir = config.tmp_root / "jobs" / "j1" / "output"
             output_dir.mkdir(parents=True)
             
             job = {
@@ -2181,9 +2181,9 @@ class TestParameterKeyAllowlistPropertyTests:
         
         # Create a mock config
         config = MockConfig(tmp_path)
-        session_dir = config.workspace_root / "sessions" / "s1"
+        session_dir = config.tmp_root / "sessions" / "s1"
         session_dir.mkdir(parents=True, exist_ok=True)
-        output_dir = config.workspace_root / "jobs" / "j1" / "output"
+        output_dir = config.tmp_root / "jobs" / "j1" / "output"
         output_dir.mkdir(parents=True, exist_ok=True)
         
         # Create a job request with the unknown parameter key
@@ -2434,9 +2434,9 @@ class TestParameterKeyAllowlistPropertyTests:
         
         # Create a mock config
         config = MockConfig(tmp_path)
-        session_dir = config.workspace_root / "sessions" / "s1"
+        session_dir = config.tmp_root / "sessions" / "s1"
         session_dir.mkdir(parents=True, exist_ok=True)
-        output_dir = config.workspace_root / "jobs" / "j1" / "output"
+        output_dir = config.tmp_root / "jobs" / "j1" / "output"
         output_dir.mkdir(parents=True, exist_ok=True)
         
         # Build parameter overrides
@@ -2893,9 +2893,9 @@ class TestShellInjectionPropertyTests:
         become single argv elements without altering command structure.
         """
         config = MockConfig(tmp_path)
-        session_dir = config.workspace_root / "sessions" / "s1"
+        session_dir = config.tmp_root / "sessions" / "s1"
         session_dir.mkdir(parents=True, exist_ok=True)
-        output_dir = config.workspace_root / "jobs" / "j1" / "output"
+        output_dir = config.tmp_root / "jobs" / "j1" / "output"
         output_dir.mkdir(parents=True, exist_ok=True)
         
         # Create job with parameter containing shell metacharacters
@@ -2969,9 +2969,9 @@ class TestShellInjectionPropertyTests:
         literal strings without shell interpretation.
         """
         config = MockConfig(tmp_path)
-        session_dir = config.workspace_root / "sessions" / "s1"
+        session_dir = config.tmp_root / "sessions" / "s1"
         session_dir.mkdir(parents=True, exist_ok=True)
-        output_dir = config.workspace_root / "jobs" / "j1" / "output"
+        output_dir = config.tmp_root / "jobs" / "j1" / "output"
         output_dir.mkdir(parents=True, exist_ok=True)
         
         # Try injection in multiple fields
@@ -3054,9 +3054,9 @@ class TestShellInjectionPropertyTests:
         and verify they don't alter the CLI argument structure.
         """
         config = MockConfig(tmp_path)
-        session_dir = config.workspace_root / "sessions" / "s1"
+        session_dir = config.tmp_root / "sessions" / "s1"
         session_dir.mkdir(parents=True, exist_ok=True)
-        output_dir = config.workspace_root / "jobs" / "j1" / "output"
+        output_dir = config.tmp_root / "jobs" / "j1" / "output"
         output_dir.mkdir(parents=True, exist_ok=True)
         
         # Build a value with metacharacters embedded
@@ -3105,9 +3105,9 @@ class TestShellInjectionPropertyTests:
         command injection.
         """
         config = MockConfig(tmp_path)
-        session_dir = config.workspace_root / "sessions" / "s1"
+        session_dir = config.tmp_root / "sessions" / "s1"
         session_dir.mkdir(parents=True, exist_ok=True)
-        output_dir = config.workspace_root / "jobs" / "j1" / "output"
+        output_dir = config.tmp_root / "jobs" / "j1" / "output"
         output_dir.mkdir(parents=True, exist_ok=True)
         
         # Create value with quotes
@@ -3158,9 +3158,9 @@ class TestShellInjectionPropertyTests:
         safely passed as path arguments.
         """
         config = MockConfig(tmp_path)
-        session_dir = config.workspace_root / "sessions" / "s1"
+        session_dir = config.tmp_root / "sessions" / "s1"
         session_dir.mkdir(parents=True, exist_ok=True)
-        output_dir = config.workspace_root / "jobs" / "j1" / "output"
+        output_dir = config.tmp_root / "jobs" / "j1" / "output"
         output_dir.mkdir(parents=True, exist_ok=True)
         
         # Create a file with metacharacters in its name
@@ -3209,9 +3209,9 @@ class TestShellInjectionPropertyTests:
         are treated as literal values, not as shell commands.
         """
         config = MockConfig(tmp_path)
-        session_dir = config.workspace_root / "sessions" / "s1"
+        session_dir = config.tmp_root / "sessions" / "s1"
         session_dir.mkdir(parents=True)
-        output_dir = config.workspace_root / "jobs" / "j1" / "output"
+        output_dir = config.tmp_root / "jobs" / "j1" / "output"
         output_dir.mkdir(parents=True)
         
         # Create a parameter with a dangerous shell command
@@ -3310,14 +3310,14 @@ class TestUniqueOutputDirectoriesPropertyTests:
             return
         
         config = MockConfig(tmp_path)
-        session_dir = config.workspace_root / "sessions" / "test_session"
+        session_dir = config.tmp_root / "sessions" / "test_session"
         session_dir.mkdir(parents=True, exist_ok=True)
         
         # Create output directories for two distinct jobs
-        output_dir_1 = config.workspace_root / "jobs" / job_id_1 / "output"
+        output_dir_1 = config.tmp_root / "jobs" / job_id_1 / "output"
         output_dir_1.mkdir(parents=True, exist_ok=True)
         
-        output_dir_2 = config.workspace_root / "jobs" / job_id_2 / "output"
+        output_dir_2 = config.tmp_root / "jobs" / job_id_2 / "output"
         output_dir_2.mkdir(parents=True, exist_ok=True)
         
         # Create identical job requests (only difference is output_dir)
@@ -3358,12 +3358,12 @@ class TestUniqueOutputDirectoriesPropertyTests:
             f"Output directory must be absolute: {output_path_2}"
         )
         
-        # Verify paths are within workspace
-        assert str(output_path_1).startswith(str(config.workspace_root)), (
-            f"Output directory must be within workspace: {output_path_1}"
+        # Verify paths are within tmp_root (ephemeral job storage)
+        assert str(output_path_1).startswith(str(config.tmp_root)), (
+            f"Output directory must be within tmp_root: {output_path_1}"
         )
-        assert str(output_path_2).startswith(str(config.workspace_root)), (
-            f"Output directory must be within workspace: {output_path_2}"
+        assert str(output_path_2).startswith(str(config.tmp_root)), (
+            f"Output directory must be within tmp_root: {output_path_2}"
         )
         
         # Verify paths contain the job IDs (ensuring uniqueness is based on job ID)
@@ -3400,14 +3400,14 @@ class TestUniqueOutputDirectoriesPropertyTests:
         job_id_1, job_id_2 = uuid_pair
         
         config = MockConfig(tmp_path)
-        session_dir = config.workspace_root / "sessions" / "test_session"
+        session_dir = config.tmp_root / "sessions" / "test_session"
         session_dir.mkdir(parents=True, exist_ok=True)
         
         # Create output directories
-        output_dir_1 = config.workspace_root / "jobs" / job_id_1 / "output"
+        output_dir_1 = config.tmp_root / "jobs" / job_id_1 / "output"
         output_dir_1.mkdir(parents=True, exist_ok=True)
         
-        output_dir_2 = config.workspace_root / "jobs" / job_id_2 / "output"
+        output_dir_2 = config.tmp_root / "jobs" / job_id_2 / "output"
         output_dir_2.mkdir(parents=True, exist_ok=True)
         
         # Simple job request
@@ -3457,7 +3457,7 @@ class TestUniqueOutputDirectoriesPropertyTests:
         **Validates: Requirements 6.3**
         """
         config = MockConfig(tmp_path)
-        session_dir = config.workspace_root / "sessions" / "test_session"
+        session_dir = config.tmp_root / "sessions" / "test_session"
         session_dir.mkdir(parents=True, exist_ok=True)
         
         # Generate N distinct job IDs
@@ -3474,7 +3474,7 @@ class TestUniqueOutputDirectoriesPropertyTests:
         
         for job_id in job_ids:
             # Create output directory
-            output_dir = config.workspace_root / "jobs" / job_id / "output"
+            output_dir = config.tmp_root / "jobs" / job_id / "output"
             output_dir.mkdir(parents=True, exist_ok=True)
             
             # Build CLI args

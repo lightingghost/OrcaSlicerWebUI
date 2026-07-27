@@ -82,7 +82,8 @@ def client(mock_dependencies):
     # BaseSettings instances reject the delattr that patch.object's
     # teardown needs when patching an attribute not already present on
     # that specific instance.
-    with patch.object(Settings, "init_user_workspace"):
+    with patch.object(Settings, "init_user_workspace"), \
+         patch.object(Settings, "init_tmp_workspace"):
         try:
             with TestClient(app, raise_server_exceptions=False) as test_client:
                 yield test_client
