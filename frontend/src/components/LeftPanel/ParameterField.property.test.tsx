@@ -27,20 +27,46 @@ vi.mock('../../store', () => ({
 describe('ParameterField - Property-Based Tests', () => {
   const mockSetOverride = vi.fn();
   const mockClearOverride = vi.fn();
+  const mockSetObjectOverride = vi.fn();
+  const mockClearObjectOverride = vi.fn();
 
-  const defaultStoreState = {
-    overrides: {},
-    validationErrors: {},
-    profileDefaults: {},
-    setOverride: mockSetOverride,
-    clearOverride: mockClearOverride,
-    getEffectiveDefault: (descriptor: ParameterDescriptor) => descriptor.default_value,
-  };
+  /**
+   * Builds a full mock store state. `getEffectiveValueForTarget` is derived
+   * from `overrides`/`getEffectiveDefault` (mirroring parameterSlice's real
+   * implementation for the 'global' target, the only target these tests
+   * exercise). See ParameterField.test.tsx's buildMockStoreState for why a
+   * fixed getter-on-spread approach doesn't work here.
+   */
+  function buildMockStoreState() {
+    const getEffectiveDefault = (descriptor: ParameterDescriptor) => descriptor.default_value;
+    const overrides: Record<string, unknown> = {};
+
+    return {
+      overrides,
+      validationErrors: {},
+      objectOverrides: {},
+      objectValidationErrors: {},
+      processTarget: 'global',
+      profileDefaults: {},
+      setOverride: mockSetOverride,
+      clearOverride: mockClearOverride,
+      setObjectOverride: mockSetObjectOverride,
+      clearObjectOverride: mockClearObjectOverride,
+      getEffectiveDefault,
+      getEffectiveValueForTarget: (descriptor: ParameterDescriptor) => {
+        const overrideValue = overrides[descriptor.key];
+        if (overrideValue !== undefined) {
+          return { value: overrideValue, isOverriddenAtTarget: true };
+        }
+        return { value: getEffectiveDefault(descriptor), isOverriddenAtTarget: false };
+      },
+    };
+  }
 
   beforeEach(() => {
     vi.clearAllMocks();
     cleanup();
-    (useStore as unknown as ReturnType<typeof vi.fn>).mockReturnValue(defaultStoreState);
+    (useStore as unknown as ReturnType<typeof vi.fn>).mockReturnValue(buildMockStoreState());
   });
 
   /**

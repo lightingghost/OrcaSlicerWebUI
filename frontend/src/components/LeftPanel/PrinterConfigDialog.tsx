@@ -18,6 +18,7 @@
 import React, { useEffect, useRef, useState, useCallback } from 'react';
 import { X, Save, ChevronDown, RotateCcw } from 'lucide-react';
 import { apiClient } from '../../api/client';
+import { useStore } from '../../store';
 
 // ---------------------------------------------------------------------------
 // Save As dialog
@@ -471,9 +472,17 @@ export const PrinterConfigDialog: React.FC<PrinterConfigDialogProps> = ({
       setInheritsValue(effectiveInherits);
 
       // ── 2. Try loading prior autosave — overlay on base ────────────────
+      // Only apply it if it belongs to the profile we're currently editing
+      // (marked via `_profile_path`); otherwise it's a stale autosave left
+      // over from editing a different printer profile and must be ignored.
       try {
         const autosaved = await apiClient.getAutosave('printer_config');
-        setConfig({ ...base, ...autosaved });
+        const savedFor = autosaved['_profile_path'] as string | undefined;
+        if (!savedFor || savedFor === profilePath) {
+          setConfig({ ...base, ...autosaved });
+        } else {
+          setConfig({ ...base });
+        }
       } catch {
         setConfig({ ...base });
       }
@@ -484,37 +493,49 @@ export const PrinterConfigDialog: React.FC<PrinterConfigDialogProps> = ({
       .finally(() => { setLoading(false); isFirstLoad.current = false; });
   }, [isOpen, profilePath, schema]);
 
-  // Compute changed keys (current vs base)
+  // Compute changed keys (current vs base).
+  // `inherits` and `_profile_path` are bookkeeping metadata added to the
+  // autosave payload (see buildSavePayload) — they never exist on baseConfig,
+  // so they must be excluded here or every reload of a prior autosave would
+  // show 2 phantom "changes" even with no real edits.
   const changedKeys = useCallback((): Set<string> => {
     const changed = new Set<string>();
     for (const key of Object.keys(config)) {
+      if (key === 'inherits' || key === '_profile_path') continue;
       if (!valuesEqual(config[key], baseConfig[key])) changed.add(key);
     }
     return changed;
   }, [config, baseConfig]);
 
-  // Build save payload: only changed keys + inherits chain
+  // Build save payload: only changed keys + inherits chain + a marker of
+  // which profile these edits apply to, so a later reload (or slicing —
+  // see backend cli_builder.py) can tell whether this autosave is stale.
   const buildSavePayload = useCallback((): Record<string, unknown> => {
     const changed = changedKeys();
     const payload: Record<string, unknown> = {};
     if (inheritsValue) payload['inherits'] = inheritsValue;
+    if (profilePath) payload['_profile_path'] = profilePath;
     for (const key of changed) {
       payload[key] = config[key];
     }
     return payload;
-  }, [config, changedKeys, inheritsValue]);
+  }, [config, changedKeys, inheritsValue, profilePath]);
 
-  // Debounced autosave — saves only the diff to fixed name printer_config
+  // Debounced autosave — saves only the diff to fixed name printer_config.
+  // Skip entirely when there are no real field changes, so opening the
+  // dialog and closing it without editing anything never writes an
+  // autosave (which would otherwise reappear as phantom changes on reopen).
   useEffect(() => {
     if (isFirstLoad.current || !isOpen || !profilePath) return;
     if (autosaveTimer.current) clearTimeout(autosaveTimer.current);
     autosaveTimer.current = setTimeout(() => {
+      if (changedKeys().size === 0) return;
       const payload = buildSavePayload();
       apiClient.saveAutosave('printer_config', payload)
         .catch(err => console.error('Printer autosave failed:', err));
     }, 800);
     return () => { if (autosaveTimer.current) clearTimeout(autosaveTimer.current); };
-  }, [config, isOpen, profilePath, buildSavePayload]);
+  }, [config, isOpen, profilePath, buildSavePayload, changedKeys]);
 
   const handleChange = useCallback((key: string, value: unknown) => {
     setConfig(prev => ({ ...prev, [key]: value }));
@@ -528,6 +549,26 @@ export const PrinterConfigDialog: React.FC<PrinterConfigDialogProps> = ({
     // Open Save As dialog — user can confirm/edit the name
     setSaveAsOpen(true);
   };
+
+  // Flush pending edits to the autosave immediately on close (bypassing
+  // the 800ms debounce) so a quick edit-then-close never loses the last
+  // keystroke, and re-save the session's user_config.yaml so the
+  // autosave is embedded there too (see profileSlice.saveUserConfig) —
+  // this is what lets Slice discover the edits without an explicit Save.
+  const saveUserConfig = useStore((state) => state.saveUserConfig);
+  const handleClose = useCallback(() => {
+    if (autosaveTimer.current) {
+      clearTimeout(autosaveTimer.current);
+      autosaveTimer.current = null;
+    }
+    if (!isFirstLoad.current && profilePath && changedKeys().size > 0) {
+      const payload = buildSavePayload();
+      apiClient.saveAutosave('printer_config', payload)
+        .then(() => saveUserConfig())
+        .catch(err => console.error('Printer autosave-on-close failed:', err));
+    }
+    onClose();
+  }, [profilePath, changedKeys, buildSavePayload, saveUserConfig, onClose]);
 
   const handleSaveConfirm = async (name: string) => {
     setSaveAsOpen(false);
@@ -565,7 +606,7 @@ export const PrinterConfigDialog: React.FC<PrinterConfigDialogProps> = ({
     <>
     <div
       className="fixed inset-0 bg-black/60 flex items-center justify-center z-[9999]"
-      onClick={e => { if (e.target === e.currentTarget) onClose(); }}
+      onClick={e => { if (e.target === e.currentTarget) handleClose(); }}
     >
       <div className="bg-gray-800 rounded-lg shadow-2xl flex flex-col w-[820px] max-w-[95vw] max-h-[90vh]">
 
@@ -592,7 +633,7 @@ export const PrinterConfigDialog: React.FC<PrinterConfigDialogProps> = ({
                 : saveStatus === 'error'  ? 'Error!'
                 : 'Save…'}
             </button>
-            <button onClick={onClose} className="text-gray-400 hover:text-white p-1 rounded">
+            <button onClick={handleClose} className="text-gray-400 hover:text-white p-1 rounded">
               <X className="w-5 h-5" />
             </button>
           </div>

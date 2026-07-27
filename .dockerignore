@@ -1,0 +1,45 @@
+# Keep the build context small and prevent host-installed deps/venvs from
+# leaking into COPY instructions (e.g. `COPY frontend/ .` would otherwise
+# copy the host's frontend/node_modules over what `npm ci` installs).
+
+**/.git
+**/.gitignore
+**/node_modules
+**/__pycache__
+**/*.pyc
+**/.pytest_cache
+**/.mypy_cache
+**/.venv
+**/venv
+**/dist
+**/build
+**/.DS_Store
+
+# Editor / IDE
+**/.vscode
+**/.idea
+**/.kiro
+
+# Local dev artifacts (never needed inside the image; scripts fetch OrcaSlicer
+# source/AppImage fresh at build time)
+squashfs-root
+OrcaSlicer
+*.AppImage
+*.gcode
+*.log
+
+# Docs (not needed at build time)
+*.md
+!frontend/README.md
+
+# Test files: excluded so editing/adding tests doesn't bust the
+# `COPY frontend/ .` cache layer in the frontend-build stage (the build
+# script is `vite build` only — tests are never run inside the image).
+**/*.test.ts
+**/*.test.tsx
+**/*.spec.ts
+**/*.spec.tsx
+frontend/src/test
+backend/tests
+.hypothesis
+.pytest_cache

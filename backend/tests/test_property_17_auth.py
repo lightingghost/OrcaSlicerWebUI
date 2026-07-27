@@ -69,18 +69,26 @@ def mock_dependencies():
 def client(mock_dependencies):
     """Create a test client with initialized auth and mocked dependencies."""
     from app.main import app
-    from app.config import settings
+    from app.config import settings, Settings
     
     # Temporarily override the API secret in settings
     original_secret = settings.api_secret
     settings.api_secret = TEST_SECRET
-    
-    try:
-        with TestClient(app, raise_server_exceptions=False) as test_client:
-            yield test_client
-    finally:
-        # Restore original secret
-        settings.api_secret = original_secret
+
+    # Prevent lifespan's settings.init_user_workspace() from trying to
+    # mkdir under the default /app/workspace (production default), which
+    # this dev/test environment has no write permission for. Patched on
+    # the class (not the `settings` instance) because pydantic
+    # BaseSettings instances reject the delattr that patch.object's
+    # teardown needs when patching an attribute not already present on
+    # that specific instance.
+    with patch.object(Settings, "init_user_workspace"):
+        try:
+            with TestClient(app, raise_server_exceptions=False) as test_client:
+                yield test_client
+        finally:
+            # Restore original secret
+            settings.api_secret = original_secret
 
 
 class TestProperty17UnauthenticatedRequests:

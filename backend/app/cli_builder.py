@@ -59,19 +59,67 @@ def resolve_and_guard(path: Path, root: Path) -> Path:
     return resolved
 
 
+def _load_matching_autosave(
+    autosave_dir: Path, name: str, profile_path_str: str
+) -> dict[str, Any] | None:
+    """
+    Load USER_WORKSPACE/autosave/{name}.json (a pending, unsaved diff from
+    the Printer/Filament settings dialog — see PrinterConfigDialog.tsx /
+    FilamentConfigDialog.tsx) and return it only if its `_profile_path`
+    marker matches the profile currently being resolved for this job.
+
+    Returns None if the autosave doesn't exist, can't be parsed, or belongs
+    to a different profile than the one being sliced (e.g. a stale autosave
+    left over after the user switched to a different printer/filament
+    without touching that dialog again) — in every one of those cases the
+    caller should fall back to the profile's own on-disk values.
+
+    Strips leading-underscore bookkeeping keys (`_profile_path`) and
+    `inherits`, since the latter is only meaningful when the dialog's
+    "Save…" flow creates a brand new named profile — it does not belong in
+    a resolved config's own inheritance-chain bookkeeping.
+    """
+    path = autosave_dir / f"{name}.json"
+    if not path.exists():
+        return None
+    try:
+        with open(path, "r", encoding="utf-8") as f:
+            data = json.load(f)
+    except (json.JSONDecodeError, OSError):
+        return None
+    if not isinstance(data, dict):
+        return None
+
+    saved_for = data.get("_profile_path")
+    if saved_for is not None and saved_for != profile_path_str:
+        return None
+
+    return {
+        k: v for k, v in data.items()
+        if not k.startswith("_") and k != "inherits"
+    }
+
+
 def _write_resolved_profile(
     manufacturer: str,
     category: str,
     filename: str,
     profiles_root: Path,
     output_dir: Path,
+    overlay: dict[str, Any] | None = None,
 ) -> Path:
     """
     Resolve a profile's full `inherits` chain (via
     `app.routers.profiles.resolve_profile_config`, the same logic backing
-    the `/api/profiles/.../resolved` endpoint) and write the merged,
-    flattened result as a temporary JSON file inside the job's own output
-    directory, returning its path.
+    the `/api/profiles/.../resolved` endpoint), optionally overlay a
+    pending dialog autosave diff (`overlay` — see `_load_matching_autosave`)
+    on top of it, and write the merged, flattened result as a temporary
+    JSON file inside the job's own output directory, returning its path.
+
+    The overlay lets Slice pick up in-progress Printer/Filament settings
+    dialog edits that were autosaved but never explicitly "Save…"d as a
+    new named profile — without it, only edits saved to a new profile
+    (and then re-selected) would ever reach the CLI.
 
     This is necessary because OrcaSlicer's CLI (`OrcaSlicer.cpp`'s
     `load_config_file` lambda, invoked for every `--load-settings`/
@@ -94,6 +142,9 @@ def _write_resolved_profile(
 
     resolved = resolve_profile_config(profiles_root, manufacturer, category, filename)
 
+    if overlay:
+        resolved = {**resolved, **overlay}
+
     # Keep the merged file next to the job's other outputs so it's cleaned
     # up automatically with the rest of the job's output directory,
     # matching the retention/cleanup lifecycle every other job artifact
@@ -112,6 +163,8 @@ def _resolve_profile_path_for_cli(
     category: str,
     profiles_root: Path,
     output_dir: Path,
+    autosave_dir: Path | None = None,
+    autosave_name: str | None = None,
 ) -> Path:
     """
     Given a profile path relative to profiles_root in the shape
@@ -123,6 +176,12 @@ def _resolve_profile_path_for_cli(
     profile isn't laid out in the expected manufacturer/category/filename
     shape (e.g. a user-uploaded custom profile with no vendor index to
     resolve `inherits` against), rather than failing the whole job.
+
+    When `autosave_dir`/`autosave_name` are given, also checks for a
+    pending Printer/Filament settings dialog autosave for this exact
+    profile (see `_load_matching_autosave`) and overlays it on top of the
+    resolved config before writing the temp file — so Slice picks up
+    in-progress dialog edits without requiring an explicit "Save…" first.
     """
     # Validate the raw path stays within profiles_root first (same guard
     # as before this function existed).
@@ -135,9 +194,13 @@ def _resolve_profile_path_for_cli(
     manufacturer = parts[0]
     filename = str(Path(*parts[2:]))
 
+    overlay = None
+    if autosave_dir is not None and autosave_name is not None:
+        overlay = _load_matching_autosave(autosave_dir, autosave_name, profile_path_str)
+
     try:
         resolved_path = _write_resolved_profile(
-            manufacturer, category, filename, profiles_root, output_dir
+            manufacturer, category, filename, profiles_root, output_dir, overlay=overlay
         )
     except Exception:
         # If resolution fails for any reason (missing vendor index,
@@ -238,11 +301,22 @@ def build_cli_args(
     # `_resolve_profile_path_for_cli`/`_write_resolved_profile` above) since
     # the CLI itself never does this — passing a raw, unresolved profile
     # file silently drops any keys that only exist on a parent profile.
+    # `autosave_dir` holds any pending (unsaved) Printer/Filament settings
+    # dialog edits (USER_WORKSPACE/autosave/printer_config.json,
+    # filament_N.json — see PrinterConfigDialog.tsx/FilamentConfigDialog.tsx).
+    # Passing it through lets Slice pick those edits up automatically; note
+    # `process_profile_path` deliberately does NOT go through this overlay
+    # mechanism — process-panel edits are applied via `parameter_overrides`
+    # below instead, which is already live (read directly from in-memory
+    # store state, never stale) and would double-apply if overlaid here too.
+    autosave_dir = getattr(config, "autosave_dir", None)
+
     load_settings_paths: list[str] = []
     printer_path_str = job.get("printer_profile_path")
     if printer_path_str:
         printer_path = _resolve_profile_path_for_cli(
-            printer_path_str, "machine", profiles_root, output_dir
+            printer_path_str, "machine", profiles_root, output_dir,
+            autosave_dir=autosave_dir, autosave_name="printer_config",
         )
         load_settings_paths.append(str(printer_path))
     
@@ -258,10 +332,16 @@ def build_cli_args(
     
     # Filament profiles: also ONE --load-filaments flag, semicolon-joined
     # (per `--load-filaments "filament1.json;filament2.json;..."`).
+    # Each filament's autosave slot is numbered by its position in this
+    # list (filament_1, filament_2, ...), matching FilamentConfigDialog's
+    # `filamentIndex` prop and the FilamentRow component that assigns it.
     filament_paths = job.get("filament_profile_paths", [])
     resolved_filament_paths = [
-        str(_resolve_profile_path_for_cli(fp_str, "filament", profiles_root, output_dir))
-        for fp_str in filament_paths
+        str(_resolve_profile_path_for_cli(
+            fp_str, "filament", profiles_root, output_dir,
+            autosave_dir=autosave_dir, autosave_name=f"filament_{idx + 1}",
+        ))
+        for idx, fp_str in enumerate(filament_paths)
     ]
     if resolved_filament_paths:
         args.extend(["--load-filaments", ";".join(resolved_filament_paths)])

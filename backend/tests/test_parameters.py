@@ -17,6 +17,16 @@ def client():
     # Set environment variables
     os.environ['API_SECRET'] = 'test-secret-key-12345'
     os.environ['ORCA_CLI_PATH'] = '/home/odin/local/orcaslicerWebUI/OrcaSlicer/build/linux/release/OrcaSlicer_ubu64'
+
+    # Force app.config's Settings() singleton to be rebuilt from the env
+    # vars just set — otherwise, if an earlier test file in this session
+    # already imported app.config, it (and everything that already did
+    # `from app.config import settings`) keeps using whichever env vars
+    # were current at THAT import, silently ignoring the ones set above.
+    import sys
+    for mod in list(sys.modules):
+        if mod == 'app' or mod.startswith('app.'):
+            del sys.modules[mod]
     
     # Import after setting env vars
     from app.main import app

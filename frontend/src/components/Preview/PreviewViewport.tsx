@@ -41,6 +41,15 @@ export const PreviewViewport: React.FC = () => {
   const animationFrameIdRef = useRef<number | null>(null);
   const buildPlateGroupRef = useRef<THREE.Group | null>(null);
   const toolpathGroupRef = useRef<THREE.Group | null>(null);
+  // Render-on-demand: rather than rendering every frame forever (which pins
+  // a CPU core even while completely idle — see requestRenderRef's doc
+  // comment on ThreeViewport for the full rationale), the render loop only
+  // runs while there's actually something to draw (an OrbitControls
+  // change/damping still settling, or an explicit requestRender() call from
+  // an effect that rebuilt the scene) and stops itself the moment it's
+  // caught up. Other effects call requestRenderRef.current() after
+  // mutating the scene to schedule the next paint.
+  const requestRenderRef = useRef<() => void>(() => {});
 
   const bedSize = useStore((state) => state.bedSize);
   const bedCenter = useStore((state) => state.bedCenter);
@@ -79,9 +88,17 @@ export const PreviewViewport: React.FC = () => {
     // crashed the ENTIRE app via React Router's default error boundary
     // (no errorElement configured) instead of failing gracefully within
     // just this one viewport.
+    // antialias: false (unlike ThreeViewport's main renderer) — this scene
+    // is almost entirely thin line segments (the toolpath), potentially
+    // tens of thousands of them for a real print. MSAA's per-pixel cost
+    // applies to every rasterized fragment regardless of primitive type,
+    // and buys much less visual benefit for 1px lines than it does for
+    // ThreeViewport's solid model faces/edges — dropping it noticeably
+    // reduces per-frame render cost and was a real contributor to
+    // rotation feeling laggier here than on the Prepare tab.
     let renderer: THREE.WebGLRenderer;
     try {
-      renderer = new THREE.WebGLRenderer({ antialias: true });
+      renderer = new THREE.WebGLRenderer({ antialias: false });
     } catch (error) {
       console.error('[PreviewViewport] Failed to create WebGL context:', error);
       container.textContent =
@@ -110,12 +127,75 @@ export const PreviewViewport: React.FC = () => {
     };
     controlsRef.current = controls;
 
+    // Render-on-demand loop. `animationFrameIdRef.current === null` means
+    // "not currently scheduled" — requestRender() uses that as the signal
+    // to (re)start the loop. `controls.update()` returns true as long as
+    // damping hasn't settled yet, which keeps the loop alive for exactly
+    // as long as needed after a drag/scroll and no longer.
+    let needsRender = true; // render the first frame on mount
+    // Hard cap on how long the damping "coast" tail is allowed to keep the
+    // render loop alive after the user releases a drag/scroll. In theory
+    // OrbitControls.update() should report "settled" (return false) once
+    // the residual angular velocity decays below its own EPS threshold —
+    // but that decay is measured against actual camera displacement, so
+    // if frames are ever delayed (e.g. this scene's toolpath geometry is
+    // much heavier to rasterize than ThreeViewport's, see the antialias
+    // note above), the wall-clock time to reach EPS can stretch out far
+    // longer than the ~1-2s a smooth 60fps damping curve would take —
+    // observed as the render loop (and CPU usage) staying alive for as
+    // long as ~30s after the user stopped rotating. Capping it here
+    // guarantees the loop always stops within a bounded, still visually
+    // seamless window regardless of how slowly the EPS check converges.
+    const DAMPING_MAX_TAIL_MS = 1200;
+    let dragEndedAt: number | null = null;
+    controls.addEventListener('start', () => { dragEndedAt = null; });
+    controls.addEventListener('end', () => { dragEndedAt = performance.now(); });
     const animate = () => {
-      animationFrameIdRef.current = requestAnimationFrame(animate);
-      controls.update();
-      renderer.render(scene, camera);
+      // IMPORTANT: do NOT clear animationFrameIdRef.current before calling
+      // controls.update() below. OrbitControls.update() (and its internal
+      // pointer-move handlers) synchronously fires a 'change' event
+      // whenever the camera actually moved, which calls requestRender()
+      // immediately, mid-frame. If the ref were already null at that
+      // point, requestRender() would think the loop had stopped and
+      // schedule a SECOND rAF on top of the one we schedule below,
+      // orphaning it without cancelling it — doubling (and, frame over
+      // frame, exponentially compounding) the number of animate() calls
+      // while the camera is moving, which is exactly what made rotation
+      // feel laggy. Keeping the ref non-null throughout this function's
+      // body makes requestRender()'s "already scheduled" check correct.
+      let controlsChanged = controls.update();
+      // Force the damping tail to stop within DAMPING_MAX_TAIL_MS of the
+      // drag ending, regardless of what controls.update() itself reports
+      // (see the doc comment above) — this is a safety net, not the
+      // normal-case behavior; a real 60fps session settles well within
+      // this window on its own via the EPS check.
+      if (controlsChanged && dragEndedAt !== null && performance.now() - dragEndedAt > DAMPING_MAX_TAIL_MS) {
+        controlsChanged = false;
+      }
+      const shouldRender = needsRender || controlsChanged;
+      if (shouldRender) {
+        needsRender = false;
+        renderer.render(scene, camera);
+      }
+      if (controlsChanged || needsRender) {
+        animationFrameIdRef.current = requestAnimationFrame(animate);
+      } else {
+        animationFrameIdRef.current = null;
+      }
     };
-    animate();
+    const requestRender = () => {
+      needsRender = true;
+      if (animationFrameIdRef.current === null) {
+        animationFrameIdRef.current = requestAnimationFrame(animate);
+      }
+    };
+    requestRenderRef.current = requestRender;
+    // Any camera movement (drag/pan/zoom, including damping settling after
+    // the user lets go) must repaint — this is what actually restarts the
+    // loop once it has gone idle from user interaction, matching three.js's
+    // documented on-demand-rendering pattern.
+    controls.addEventListener('change', requestRender);
+    animationFrameIdRef.current = requestAnimationFrame(animate);
 
     const handleResize = () => {
       if (!containerRef.current) return;
@@ -131,6 +211,7 @@ export const PreviewViewport: React.FC = () => {
       camera.aspect = newWidth / newHeight;
       camera.updateProjectionMatrix();
       renderer.setSize(newWidth, newHeight);
+      requestRender();
     };
     window.addEventListener('resize', handleResize);
 
@@ -145,6 +226,7 @@ export const PreviewViewport: React.FC = () => {
     return () => {
       window.removeEventListener('resize', handleResize);
       resizeObserver.disconnect();
+      controls.removeEventListener('change', requestRender);
       if (animationFrameIdRef.current !== null) {
         cancelAnimationFrame(animationFrameIdRef.current);
       }
@@ -159,6 +241,7 @@ export const PreviewViewport: React.FC = () => {
       controlsRef.current = null;
       buildPlateGroupRef.current = null;
       toolpathGroupRef.current = null;
+      requestRenderRef.current = () => {};
     };
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);
@@ -184,6 +267,7 @@ export const PreviewViewport: React.FC = () => {
     const group = buildPlateGrid(effectiveBedSize.width, effectiveBedSize.depth);
     scene.add(group);
     buildPlateGroupRef.current = group;
+    requestRenderRef.current();
   }, [bedSize]);
 
   // Toolpath rendering: rebuild the LineSegments buffer whenever the
@@ -204,7 +288,10 @@ export const PreviewViewport: React.FC = () => {
       toolpathGroupRef.current = null;
     }
 
-    if (!parsedGcode || parsedGcode.segments.length === 0) return;
+    if (!parsedGcode || parsedGcode.segments.length === 0) {
+      requestRenderRef.current();
+      return;
+    }
 
     const layers = parsedGcode.layers;
     const layer = layers[currentLayerIndex];
@@ -261,6 +348,7 @@ export const PreviewViewport: React.FC = () => {
     group.add(lines);
     scene.add(group);
     toolpathGroupRef.current = group;
+    requestRenderRef.current();
   }, [parsedGcode, currentLayerIndex, currentStepIndex, bedSize, bedCenter, hiddenRoles]);
 
   return <div ref={containerRef} className="w-full h-full relative" style={{ minHeight: '400px' }} />;

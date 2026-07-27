@@ -4,7 +4,7 @@
 set -e
 
 # Configuration
-export ORCA_CLI_PATH=/home/odin/local/orcaslicerWebUI/squashfs-root/usr/bin/orca-slicer
+export ORCA_CLI_PATH=/home/odin/local/orcaslicerWebUI/squashfs-root/bin/orca-slicer
 export WORKSPACE_ROOT=/tmp/orca-workspace
 export USER_WORKSPACE=/tmp/orca-workspace/user_configs
 export MAX_CONCURRENT_JOBS=4

@@ -14,6 +14,8 @@ import sys
 
 from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
+from fastapi.staticfiles import StaticFiles
+from fastapi.responses import FileResponse
 
 
 class JSONFormatter(logging.Formatter):
@@ -231,6 +233,8 @@ from app.routers import (
     user_config,
     printer_config,
     device_connection,
+    arrange,
+    projects,
 )
 
 app.include_router(files.router, prefix="/api", tags=["files"])
@@ -240,7 +244,52 @@ app.include_router(jobs.router, prefix="/api", tags=["jobs"])
 app.include_router(user_config.router, prefix="/api", tags=["user_config"])
 app.include_router(printer_config.router, prefix="/api", tags=["printer_config"])
 app.include_router(device_connection.router, prefix="/api", tags=["device_connection"])
+app.include_router(arrange.router, prefix="/api", tags=["arrange"])
+app.include_router(projects.router, prefix="/api", tags=["projects"])
 app.include_router(websockets.router, tags=["websockets"])
+
+
+# ---------------------------------------------------------------------------
+# Static file serving (frontend React SPA)
+# ---------------------------------------------------------------------------
+# The frontend build output is copied to /app/frontend/dist at image build
+# time.  STATIC_DIR can be overridden via environment variable for local dev.
+import os
+from pathlib import Path
+
+_STATIC_DIR = Path(os.environ.get("STATIC_DIR", Path(__file__).parent.parent.parent / "frontend" / "dist"))
+
+if _STATIC_DIR.exists():
+    # Serve hashed assets (JS/CSS/images) with long-lived cache headers
+    app.mount("/assets", StaticFiles(directory=_STATIC_DIR / "assets"), name="assets")
+
+    # Serve the /data/ directory (config dialog JSON files)
+    _data_dir = _STATIC_DIR / "data"
+    if _data_dir.exists():
+        app.mount("/data", StaticFiles(directory=_data_dir), name="data")
+
+    # Serve any other static files at the root (favicon, manifest, …)
+    app.mount("/static", StaticFiles(directory=_STATIC_DIR), name="static-root")
+
+    # SPA catch-all: return index.html for every path not matched above so
+    # client-side routing (react-router) works on hard refresh / deep links.
+    #
+    # IMPORTANT: must exclude /api/* and /ws/* — otherwise a malformed or
+    # unmatched API path (e.g. one containing ".." segments that get
+    # normalized to a route no API router recognizes) falls through to
+    # this handler and incorrectly returns 200 + index.html instead of a
+    # 404, defeating path-traversal / not-found checks the API routers
+    # rely on (see resolve_and_guard's callers in profiles.py/jobs.py).
+    from fastapi import HTTPException
+
+    @app.get("/{full_path:path}", include_in_schema=False)
+    async def spa_fallback(full_path: str) -> FileResponse:
+        if full_path.startswith("api/") or full_path.startswith("ws/"):
+            raise HTTPException(status_code=404, detail="Not Found")
+        index = _STATIC_DIR / "index.html"
+        return FileResponse(str(index))
+else:
+    print(f"WARNING: Static dir {_STATIC_DIR} not found — frontend will not be served")
 
 
 if __name__ == "__main__":

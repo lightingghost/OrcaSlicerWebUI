@@ -71,8 +71,6 @@ describe('TopBar', () => {
     expect(screen.getByRole('tab', { name: 'Prepare' })).toBeInTheDocument();
     expect(screen.getByRole('tab', { name: 'Preview' })).toBeInTheDocument();
     expect(screen.getByRole('tab', { name: 'Device' })).toBeInTheDocument();
-    expect(screen.getByRole('tab', { name: 'Project' })).toBeInTheDocument();
-    expect(screen.getByRole('tab', { name: 'Calibration' })).toBeInTheDocument();
   });
 
   it('highlights active tab', () => {
@@ -101,8 +99,8 @@ describe('TopBar', () => {
     render(<TopBar activeTab="prepare" onTabChange={handleTabChange} />);
 
     // Test clicking each tab
-    const tabs = ['Prepare', 'Preview', 'Device', 'Project', 'Calibration'] as const;
-    const tabIds = ['prepare', 'preview', 'device', 'project', 'calibration'] as const;
+    const tabs = ['Prepare', 'Preview', 'Device'] as const;
+    const tabIds = ['prepare', 'preview', 'device'] as const;
 
     for (let i = 0; i < tabs.length; i++) {
       handleTabChange.mockClear();
@@ -116,8 +114,6 @@ describe('TopBar', () => {
       { label: 'Prepare', id: 'prepare' },
       { label: 'Preview', id: 'preview' },
       { label: 'Device', id: 'device' },
-      { label: 'Project', id: 'project' },
-      { label: 'Calibration', id: 'calibration' },
     ] as const;
 
     tabs.forEach(({ label, id }) => {

@@ -25,6 +25,16 @@ def client():
     # Set environment variables
     os.environ['API_SECRET'] = 'test-secret-key-12345'
     os.environ['ORCA_CLI_PATH'] = '/home/odin/local/orcaslicerWebUI/OrcaSlicer/build/linux/release/OrcaSlicer_ubu64'
+
+    # Force app.config's Settings() singleton to be rebuilt from the env
+    # vars just set — otherwise, if an earlier test file in this session
+    # already imported app.config, it (and everything that already did
+    # `from app.config import settings`) keeps using whichever env vars
+    # were current at THAT import, silently ignoring the ones set above.
+    import sys
+    for mod in list(sys.modules):
+        if mod == 'app' or mod.startswith('app.'):
+            del sys.modules[mod]
     
     # Import after setting env vars
     from app.main import app
@@ -425,11 +435,24 @@ class TestProfileLookupEdgeCases:
     ):
         """
         Verify behavior with special characters in manufacturer name.
+
+        NOTE: httpx (which TestClient wraps) normalizes ".." path segments
+        client-side before the request is even sent — e.g.
+        "/api/profiles/../../" actually gets sent as a request for "/"
+        (verified directly against httpx.URL), which lands on the SPA
+        index route (see main.py's spa_fallback) rather than exercising
+        any manufacturer-lookup logic at all. Percent-encoding the dots
+        (%2e%2e) below makes the payload survive httpx's client-side
+        normalization so it reaches the server as a literal ".." segment
+        the FastAPI/profiles router itself must reject — this is what
+        actually exercises _get_profiles_root's manufacturer-not-found
+        handling for a raw client (curl, netcat) that doesn't normalize
+        the path before sending it.
         """
         special_names = [
-            '../etc',
-            '../../',
-            'manufacturer/../',
+            '%2e%2e/etc',
+            '%2e%2e/%2e%2e/',
+            'manufacturer/%2e%2e/',
             'manufacturer/./subdir',
         ]
         

@@ -1,19 +1,14 @@
 # Docker Compose configuration for OrcaSlicer Web UI.
 #
-# Single combined container: nginx serves the frontend and proxies
-# /api + /ws to the uvicorn backend running in the same container. The
-# OrcaSlicer CLI (extracted from the pinned AppImage release) is baked
-# into the image at build time, so no host bind-mount is required.
+# Single container: uvicorn (FastAPI) serves both the API and the React SPA.
+# The OrcaSlicer CLI (extracted from the pinned AppImage release) is baked
+# into the image at build time — no host bind-mount required.
 #
-# ORCASLICER_VERSION / ARCH control which upstream source/AppImage the
-# image is built from and are read from build.env. Compose only expands
-# ${VAR} in this file from the shell environment or a top-level .env file,
-# NOT from a service's env_file:, so build with:
-#
+# Build with:
 #   docker compose --env-file build.env build
 #   docker compose --env-file build.env up -d
 #
-# (see build.env for valid ORCASLICER_VERSION / ARCH values)
+# See build.env for ORCASLICER_VERSION / ARCH values.
 
 services:
   orcaslicer-webui:
@@ -25,7 +20,7 @@ services:
         ARCH: ${ARCH}
         VITE_API_SECRET: ${API_SECRET:-changeme}
     ports:
-      - "80:80"
+      - "80:8080"
     environment:
       - API_SECRET=${API_SECRET:-changeme}
     volumes:

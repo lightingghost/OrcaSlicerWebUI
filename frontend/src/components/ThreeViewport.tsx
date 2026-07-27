@@ -30,7 +30,7 @@ import {
   disposeLayOnFaceOverlay,
   type LayOnFaceOverlay,
 } from '../lib/orientation';
-import { computeArrangePlan } from '../lib/arrangePacking';
+import { apiClient } from '../api/client';
 import type { PendingTransformCommand } from '../store/objectManipulationSlice';
 
 // Spacing (mm) used to lay out newly-imported objects side-by-side on the
@@ -186,6 +186,17 @@ export const ThreeViewport: React.FC = () => {
   const rendererRef = useRef<THREE.WebGLRenderer | null>(null);
   const controlsRef = useRef<OrbitControls | null>(null);
   const animationFrameIdRef = useRef<number | null>(null);
+  // Render-on-demand: continuously calling renderer.render() every single
+  // frame forever (the previous behavior) pins a CPU core indefinitely
+  // even while the viewport is 100% idle — reported as ~99% CPU usage
+  // from repeated slice/preview cycles, but really just a symptom of the
+  // Prepare viewport being permanently mounted (see MainArea) with an
+  // unconditional rAF loop running the whole time. Instead, the loop only
+  // keeps scheduling itself while there's live camera-animation/damping in
+  // progress or a pending drag update; otherwise it renders once and stops
+  // until requestRender() is called again (by an interaction handler or an
+  // effect that mutated the scene).
+  const requestRenderRef = useRef<() => void>(() => {});
   const buildPlateGroupRef = useRef<THREE.Group | null>(null);
   // One mesh per loaded object, keyed by file_id, so multiple imported
   // models can coexist on the bed and be selected/moved independently.
@@ -244,6 +255,8 @@ export const ThreeViewport: React.FC = () => {
   const arrangeRequestId = useStore((state) => state.arrangeRequestId);
   const arrangeSettings = useStore((state) => state.arrangeSettings);
   const setCaptureViewportThumbnail = useStore((state) => state.setCaptureViewportThumbnail);
+  const setGetPlateSnapshot = useStore((state) => state.setGetPlateSnapshot);
+  const clearPendingInitialTransform = useStore((state) => state.clearPendingInitialTransform);
 
 
 
@@ -340,6 +353,7 @@ export const ThreeViewport: React.FC = () => {
       startTime: performance.now(),
       duration: 500, // 500ms animation duration
     };
+    requestRenderRef.current(); // restart the render loop for the animation
   }, []);
 
   useEffect(() => {
@@ -427,6 +441,38 @@ export const ThreeViewport: React.FC = () => {
     
     controlsRef.current = controls;
 
+    // Render-on-demand loop (see requestRenderRef's doc comment above).
+    // `needsRender` starts true so the initial frame always paints.
+    // `controls.update()` returns true for as long as OrbitControls still
+    // has damping motion to settle, which is what keeps the loop alive
+    // for a short tail after the user releases a drag/scroll and then
+    // lets it go fully idle again.
+    let needsRender = true;
+    const requestRender = () => {
+      needsRender = true;
+      if (animationFrameIdRef.current === null) {
+        animationFrameIdRef.current = requestAnimationFrame(animate);
+      }
+    };
+    requestRenderRef.current = requestRender;
+    controls.addEventListener('change', requestRender);
+
+    // Hard cap on how long the damping "coast" tail is allowed to keep the
+    // render loop alive after the user releases a drag/scroll. In theory
+    // controls.update() should report "settled" (return false) once the
+    // residual angular velocity decays below its own tiny EPS threshold,
+    // but that decay is measured against actual camera displacement — if
+    // frames are ever delayed for any reason, the wall-clock time to reach
+    // EPS can stretch out far longer than a smooth damping curve would
+    // normally take. Capping it here guarantees the loop always stops
+    // within a bounded, still visually seamless window. See the matching
+    // (and more frequently triggered, due to heavier toolpath geometry)
+    // cap in PreviewViewport.tsx for the concrete case this was observed.
+    const DAMPING_MAX_TAIL_MS = 1200;
+    let dragEndedAt: number | null = null;
+    controls.addEventListener('start', () => { dragEndedAt = null; });
+    controls.addEventListener('end', () => { dragEndedAt = performance.now(); });
+
     // ---------------------------------------------------------------
     // Selection + drag-to-move interaction
     //
@@ -486,6 +532,10 @@ export const ThreeViewport: React.FC = () => {
 
       // Disable orbiting while dragging the object
       controls.enabled = false;
+      // The render loop may have gone idle (no OrbitControls 'change'
+      // events fire from a raw object drag) — explicitly restart it so
+      // the mesh actually repaints as the pointer moves.
+      requestRenderRef.current();
     };
 
     const handlePointerMove = (event: PointerEvent) => {
@@ -538,6 +588,7 @@ export const ThreeViewport: React.FC = () => {
           const hoveredMesh = hits.length > 0 ? (hits[0].object as THREE.Mesh) : null;
           applyLayOnFaceHover(overlay, hoveredMesh);
           canvas.style.cursor = hoveredMesh ? 'pointer' : 'crosshair';
+          requestRenderRef.current(); // hover highlight changed the overlay material
         } else {
           canvas.style.cursor = 'crosshair';
         }
@@ -767,6 +818,11 @@ export const ThreeViewport: React.FC = () => {
       const newOffset = new THREE.Vector3().setFromSpherical(spherical);
       mainCamera.position.copy(mainControls.target).add(newOffset);
       mainCamera.lookAt(mainControls.target);
+      // Mutates the main camera directly rather than through OrbitControls,
+      // so it doesn't fire controls' 'change' event — must request a
+      // repaint explicitly or dragging the gizmo cube would freeze the
+      // rendered frame while still moving the camera underneath it.
+      requestRenderRef.current();
     };
 
     const handleGizmoPointerDown = (event: PointerEvent) => {
@@ -801,6 +857,7 @@ export const ThreeViewport: React.FC = () => {
       if (gizmoCanvas) {
         gizmoCanvas.style.cursor = picked ? 'pointer' : 'grab';
       }
+      requestRenderRef.current(); // hover highlight changed the gizmo scene
     };
 
     const handleGizmoPointerUp = (event: PointerEvent) => {
@@ -836,7 +893,10 @@ export const ThreeViewport: React.FC = () => {
     const handleGizmoPointerLeave = () => {
       gizmoDragRef.current = null;
       const cube = gizmoCubeRef.current;
-      if (cube) applyViewCubeHover(cube, null);
+      if (cube) {
+        applyViewCubeHover(cube, null);
+        requestRenderRef.current();
+      }
     };
 
     gizmoCanvas?.addEventListener('pointerdown', handleGizmoPointerDown);
@@ -844,13 +904,32 @@ export const ThreeViewport: React.FC = () => {
     gizmoCanvas?.addEventListener('pointerup', handleGizmoPointerUp);
     gizmoCanvas?.addEventListener('pointerleave', handleGizmoPointerLeave);
 
-    // Animation loop using requestAnimationFrame
+    // Animation loop using requestAnimationFrame — render-on-demand (see
+    // requestRenderRef's doc comment near the top of the component): keeps
+    // rescheduling itself only while there's a camera-preset animation in
+    // flight, a drag in progress, or OrbitControls damping still settling;
+    // otherwise it paints the pending frame (if any) and stops, instead of
+    // burning a CPU core rendering identical frames forever while idle.
     const animate = () => {
-      animationFrameIdRef.current = requestAnimationFrame(animate);
+      // IMPORTANT: do NOT clear animationFrameIdRef.current here, before
+      // controls.update() runs below. OrbitControls.update() (and its
+      // internal pointer-move handlers) synchronously fires a 'change'
+      // event whenever the camera actually moved, which calls
+      // requestRender() immediately, mid-frame. If the ref were already
+      // null at that point, requestRender() would think the loop had
+      // stopped and schedule a SECOND rAF on top of the one scheduled at
+      // the bottom of this function, orphaning it without cancelling it —
+      // doubling (and, frame over frame, exponentially compounding) the
+      // number of animate() calls while the camera is moving, which is
+      // exactly what made rotation feel laggy. Keeping the ref non-null
+      // throughout this function's body makes requestRender()'s "already
+      // scheduled" check correct; it's only cleared in the final else
+      // branch below when we actually decide to stop the loop.
 
       // Handle camera preset animation
       const animState = animationStateRef.current;
-      if (animState && animState.isAnimating) {
+      const isPresetAnimating = !!(animState && animState.isAnimating);
+      if (isPresetAnimating && animState) {
         const elapsed = performance.now() - animState.startTime;
         const progress = Math.min(elapsed / animState.duration, 1.0);
         
@@ -869,43 +948,69 @@ export const ThreeViewport: React.FC = () => {
         if (progress >= 1.0 && animationStateRef.current) {
           animationStateRef.current.isAnimating = false;
         }
+        needsRender = true;
       }
 
-      // Update controls (required for damping)
-      controls.update();
-
-      // Keep the selection outline glued to its target mesh as it moves
-      if (selectionOutlineRef.current) {
-        selectionOutlineRef.current.update();
+      // Update controls (required for damping); returns true while damping
+      // motion is still settling, which is also treated as "needs another
+      // frame" so the deceleration tail after a drag/scroll plays smoothly.
+      let controlsChanged = controls.update();
+      // Safety net: force the tail to stop within DAMPING_MAX_TAIL_MS of
+      // the drag ending regardless of what update() itself reports (see
+      // the doc comment above) — a normal 60fps session settles well
+      // within this window on its own via the EPS check.
+      if (controlsChanged && dragEndedAt !== null && performance.now() - dragEndedAt > DAMPING_MAX_TAIL_MS) {
+        controlsChanged = false;
       }
 
-      // Render the main scene
-      renderer.render(scene, camera);
+      // An active object drag (see handlePointerMove below) mutates the
+      // mesh directly outside of this loop and doesn't go through
+      // OrbitControls at all, so it must independently keep the loop alive.
+      const isDragging = dragStateRef.current !== null;
 
-      // Render the view-cube gizmo, keeping it oriented the same way the
-      // main camera is currently looking at the scene. It's not enough to
-      // copy the main camera's quaternion while leaving the gizmo camera's
-      // position fixed — that only rotates it in place and it stops
-      // pointing at the cube (which sits at the origin). Instead, place
-      // the gizmo camera along the same direction from the origin as the
-      // main camera (normalized to a fixed gizmo distance) and re-aim it
-      // at the cube's center every frame, so the cube's orientation always
-      // mirrors the current 3D view.
-      if (gizmoRendererRef.current && gizmoSceneRef.current && gizmoCameraRef.current && cameraRef.current) {
-        const mainCam = cameraRef.current;
-        const gizmoCam = gizmoCameraRef.current;
+      const shouldRenderNow = needsRender || controlsChanged || isDragging;
+      if (shouldRenderNow) {
+        needsRender = false;
 
-        const direction = mainCam.position.clone().normalize();
-        gizmoCam.position.copy(direction.multiplyScalar(GIZMO_CAMERA_DISTANCE));
-        gizmoCam.up.copy(mainCam.up);
-        gizmoCam.lookAt(0, 0, 0);
+        // Keep the selection outline glued to its target mesh as it moves
+        if (selectionOutlineRef.current) {
+          selectionOutlineRef.current.update();
+        }
 
-        gizmoRendererRef.current.render(gizmoSceneRef.current, gizmoCam);
+        // Render the main scene
+        renderer.render(scene, camera);
+
+        // Render the view-cube gizmo, keeping it oriented the same way the
+        // main camera is currently looking at the scene. It's not enough to
+        // copy the main camera's quaternion while leaving the gizmo camera's
+        // position fixed — that only rotates it in place and it stops
+        // pointing at the cube (which sits at the origin). Instead, place
+        // the gizmo camera along the same direction from the origin as the
+        // main camera (normalized to a fixed gizmo distance) and re-aim it
+        // at the cube's center every frame, so the cube's orientation always
+        // mirrors the current 3D view.
+        if (gizmoRendererRef.current && gizmoSceneRef.current && gizmoCameraRef.current && cameraRef.current) {
+          const mainCam = cameraRef.current;
+          const gizmoCam = gizmoCameraRef.current;
+
+          const direction = mainCam.position.clone().normalize();
+          gizmoCam.position.copy(direction.multiplyScalar(GIZMO_CAMERA_DISTANCE));
+          gizmoCam.up.copy(mainCam.up);
+          gizmoCam.lookAt(0, 0, 0);
+
+          gizmoRendererRef.current.render(gizmoSceneRef.current, gizmoCam);
+        }
+      }
+
+      if (isPresetAnimating || controlsChanged || isDragging || needsRender) {
+        animationFrameIdRef.current = requestAnimationFrame(animate);
+      } else {
+        animationFrameIdRef.current = null;
       }
     };
 
-    // Start the animation loop
-    animate();
+    // Kick off the initial frame
+    animationFrameIdRef.current = requestAnimationFrame(animate);
 
     // Register the thumbnail-capture function used by jobSlice's
     // job-completion handlers (see viewportSlice.ts's doc comment on
@@ -977,6 +1082,78 @@ export const ThreeViewport: React.FC = () => {
       });
     });
 
+    // Register the plate-snapshot function used by projectSlice's
+    // downloadProject (see viewportSlice.ts's doc comment on
+    // getPlateSnapshot). Reads every loaded mesh's CURRENT live
+    // position/orientation directly from the Three.js scene — the only
+    // source of truth for object placement, since it's never mirrored
+    // into Zustand.
+    //
+    // IMPORTANT: reports object.position/quaternion directly, NOT the
+    // world bounding-box center. The backend rebuilds each object's
+    // world geometry by applying this transform to the RAW, untransformed
+    // vertices straight from the uploaded STL file (see
+    // threemf_io.parse_stl_bytes + write_3mf) — exactly mirroring
+    // THREE.js's own `worldVertex = position + quaternion.rotate(
+    // localVertex)` composition, since the mesh's geometry buffer is
+    // never mutated after load (see modelLoader.ts's loadModel, which
+    // only ever adjusts mesh.position, never the vertex data itself).
+    // Bounding-box center is a DIFFERENT quantity that only coincides
+    // with position for an unrotated object — for anything tilted (Lay
+    // on Face, manual rotate), a rotated point cloud's AABB center is
+    // not simply the rotated original center, so using bbox center here
+    // would silently write wrong positions into the exported 3mf for any
+    // non-axis-aligned object.
+    //
+    // x/y are converted from scene-local (origin-centered) to
+    // bed-absolute mm by adding bedCenter — the inverse of the
+    // conversion the Arrange-result-application effect below performs
+    // (see that effect's own comment for why this offset exists: some
+    // printers' bed_shape isn't centered at the origin).
+    // NOTE: setGetPlateSnapshot's stored value must, when CALLED, return
+    // the snapshot array directly — unlike setCaptureViewportThumbnail
+    // just above (which stores a function that returns a Promise, so an
+    // extra `() => { return new Promise(...) }` wrapping is correct
+    // there), getPlateSnapshot's type is `() => Array<...>`, so wrapping
+    // the array-returning function in one more `() => { return fn }`
+    // layer (as an earlier version of this code did) makes calling it
+    // return ANOTHER function instead of the array — which is exactly
+    // what caused "snapshot is not iterable" wherever this was consumed
+    // (SubmitButton.tsx, ProjectAutoSave.tsx).
+    setGetPlateSnapshot(() => {
+        const { bedCenter } = useStore.getState();
+        const effectiveBedCenter = bedCenter ?? { x: 0, y: 0 };
+        const snapshot: Array<{
+          file_id: string;
+          x: number;
+          y: number;
+          z: number;
+          qx: number;
+          qy: number;
+          qz: number;
+          qw: number;
+          sx: number;
+          sy: number;
+          sz: number;
+        }> = [];
+        for (const [fileId, object] of meshesRef.current.entries()) {
+          snapshot.push({
+            file_id: fileId,
+            x: object.position.x + effectiveBedCenter.x,
+            y: object.position.y + effectiveBedCenter.y,
+            z: object.position.z,
+            qx: object.quaternion.x,
+            qy: object.quaternion.y,
+            qz: object.quaternion.z,
+            qw: object.quaternion.w,
+            sx: object.scale.x,
+            sy: object.scale.y,
+            sz: object.scale.z,
+          });
+        }
+        return snapshot;
+    });
+
     // Handle window resize
     const handleResize = () => {
       if (!containerRef.current) return;
@@ -994,6 +1171,7 @@ export const ThreeViewport: React.FC = () => {
       camera.updateProjectionMatrix();
 
       renderer.setSize(newWidth, newHeight);
+      requestRenderRef.current();
     };
 
     window.addEventListener('resize', handleResize);
@@ -1028,9 +1206,11 @@ export const ThreeViewport: React.FC = () => {
       if (animationFrameIdRef.current !== null) {
         cancelAnimationFrame(animationFrameIdRef.current);
       }
+      requestRenderRef.current = () => {};
 
       // Dispose of controls
       if (controlsRef.current) {
+        controlsRef.current.removeEventListener('change', requestRender);
         controlsRef.current.dispose();
       }
 
@@ -1066,6 +1246,7 @@ export const ThreeViewport: React.FC = () => {
       clearLayOnFaceOverlay();
       setObjectTransformSnapshot(null);
       setCaptureViewportThumbnail(null);
+      setGetPlateSnapshot(null);
     };
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);
@@ -1100,6 +1281,7 @@ export const ThreeViewport: React.FC = () => {
     const buildPlateGroup = buildPlateGrid(effectiveBedSize.width, effectiveBedSize.depth);
     scene.add(buildPlateGroup);
     buildPlateGroupRef.current = buildPlateGroup;
+    requestRenderRef.current();
   }, [bedSize]); // Re-run when bedSize changes
 
   // Subscribe to uploadedFiles and load any newly-uploaded files as
@@ -1145,8 +1327,27 @@ export const ThreeViewport: React.FC = () => {
                   : material.clone();
               }
             });
-            // Offset so the clone doesn't spawn exactly on top of its source.
-            clonedMesh.position.x += NEW_OBJECT_SPACING_MM;
+
+            // Project autosave restore (see ProjectAutoSave.tsx) can
+            // recreate clones too — apply the clone's own saved placement
+            // if one is pending, exactly like the non-clone path below,
+            // instead of always defaulting to "offset from the source".
+            const clonePending = useStore.getState().pendingInitialTransforms.get(file.file_id);
+            if (clonePending) {
+              const { bedCenter } = useStore.getState();
+              const effectiveBedCenter = bedCenter ?? { x: 0, y: 0 };
+              clonedMesh.position.set(
+                clonePending.x - effectiveBedCenter.x,
+                clonePending.y - effectiveBedCenter.y,
+                clonePending.z
+              );
+              clonedMesh.quaternion.set(clonePending.qx, clonePending.qy, clonePending.qz, clonePending.qw);
+              clonedMesh.scale.set(clonePending.sx, clonePending.sy, clonePending.sz);
+              clearPendingInitialTransform(file.file_id);
+            } else {
+              // Offset so the clone doesn't spawn exactly on top of its source.
+              clonedMesh.position.x += NEW_OBJECT_SPACING_MM;
+            }
 
             scene.add(clonedMesh);
             meshesRef.current.set(file.file_id, clonedMesh);
@@ -1162,10 +1363,30 @@ export const ThreeViewport: React.FC = () => {
             setModelMetadata
           );
 
-          // Offset each newly-imported object so multiple files don't spawn
-          // stacked at the origin. Existing objects are untouched.
-          const slot = meshesRef.current.size + index;
-          result.mesh.position.x += slot * NEW_OBJECT_SPACING_MM;
+          // Project-imported objects (see projectSlice.ts's importProject)
+          // carry their ORIGINAL position/orientation/scale from the .3mf
+          // they came from — apply that instead of the default "stack new
+          // imports in a grid" placement, so re-importing a downloaded
+          // project restores exactly how it looked before, not a fresh
+          // grid layout.
+          const pending = useStore.getState().pendingInitialTransforms.get(file.file_id);
+          if (pending) {
+            const { bedCenter } = useStore.getState();
+            const effectiveBedCenter = bedCenter ?? { x: 0, y: 0 };
+            result.mesh.position.set(
+              pending.x - effectiveBedCenter.x,
+              pending.y - effectiveBedCenter.y,
+              pending.z
+            );
+            result.mesh.quaternion.set(pending.qx, pending.qy, pending.qz, pending.qw);
+            result.mesh.scale.set(pending.sx, pending.sy, pending.sz);
+            clearPendingInitialTransform(file.file_id);
+          } else {
+            // Offset each newly-imported object so multiple files don't
+            // spawn stacked at the origin. Existing objects are untouched.
+            const slot = meshesRef.current.size + index;
+            result.mesh.position.x += slot * NEW_OBJECT_SPACING_MM;
+          }
 
           scene.add(result.mesh);
           meshesRef.current.set(file.file_id, result.mesh);
@@ -1180,6 +1401,7 @@ export const ThreeViewport: React.FC = () => {
           loadedFileIdsRef.current.delete(file.file_id);
           // TODO: Show error to user via store/notification system
         }
+        requestRenderRef.current();
       }
     };
 
@@ -1216,6 +1438,7 @@ export const ThreeViewport: React.FC = () => {
       if (useStore.getState().selectedObjectId === id) {
         setSelectedObjectId(null);
       }
+      requestRenderRef.current();
     }
   }, [uploadedFiles, setSelectedObjectId]);
 
@@ -1235,6 +1458,7 @@ export const ThreeViewport: React.FC = () => {
     updateSelectionOutline();
     setManipulationPanelOpen(false);
     setLayOnFacePickModeActive(false);
+    requestRenderRef.current();
   }, [selectedObjectId, updateSelectionOutline, setManipulationPanelOpen, setLayOnFacePickModeActive]);
 
   // Build/remove the Lay on Face highlighted-face overlays whenever pick
@@ -1251,60 +1475,111 @@ export const ThreeViewport: React.FC = () => {
     const overlay = buildLayOnFaceOverlays(mesh);
     mesh.add(overlay.group);
     layOnFaceOverlayRef.current = overlay;
+    requestRenderRef.current();
 
     return () => {
       clearLayOnFaceOverlay();
+      requestRenderRef.current();
     };
   }, [isLayOnFacePickModeActive, selectedObjectId, clearLayOnFaceOverlay]);
 
   // Run an Arrange pass whenever arrangeRequestId increments (dispatched
   // by ArrangeSettingsPanel's "Arrange" button — see arrangeSettingsSlice
   // for why this is a one-shot counter rather than a boolean flag).
-  // Matches native's Arrange toolbar action: it always arranges every
-  // object currently on the plate (not just the selection), applies the
-  // current settings (spacing / auto-rotate / align-to-Y), and finishes
-  // by centering the resulting pile on the bed (computeArrangePlan's
-  // bottomLeftFillPack already centers the pile at the origin).
+  //
+  // This calls the backend's /api/arrange endpoint, which invokes the
+  // REAL OrcaSlicer CLI's own arrange algorithm (a libnest2d NFP nester —
+  // see backend/app/routers/arrange.py) instead of the browser's
+  // hand-ported approximation (arrangePacking.ts) that used to run here.
+  // That approximation was the root cause of Prepare's Arrange button
+  // showing different object positions than Slice → Preview: the CLI
+  // always re-arranges raw model uploads with its own real algorithm
+  // during slicing regardless of what the browser displayed (see
+  // cli_builder.py's `--arrange` flag), so the two could never match
+  // unless Prepare calls that same real algorithm too — which is exactly
+  // what this now does.
   useEffect(() => {
     if (arrangeRequestId === 0) return; // skip the initial mount (no-op default value)
 
     const entries = Array.from(meshesRef.current.entries()).map(([id, object]) => ({ id, object }));
     if (entries.length === 0) return;
 
-    const plan = computeArrangePlan(entries, {
-      spacingMm: arrangeSettings.spacing,
-      enableRotation: arrangeSettings.enableRotation,
-      alignToYAxis: arrangeSettings.alignToYAxis,
-      bedSize: bedSize ?? undefined,
-    });
-
-    for (const { id, object } of entries) {
-      const extraRotation = plan.extraRotations.get(id) ?? 0;
-      if (Math.abs(extraRotation) > 1e-9) {
-        // Rotate about world Z (yaw only — arrange only reorients the
-        // footprint, matching native's 2D nester), composed on top of the
-        // object's current orientation, same convention as
-        // applyRotationRelative's 'world' mode.
-        const deltaQuat = new THREE.Quaternion().setFromAxisAngle(new THREE.Vector3(0, 0, 1), extraRotation);
-        object.quaternion.premultiply(deltaQuat);
-      }
-
-      const targetCenter = plan.targetCenters.get(id);
-      if (targetCenter) {
-        object.updateMatrixWorld(true);
-        const box = new THREE.Box3().setFromObject(object);
-        const currentCenter = box.getCenter(new THREE.Vector3());
-        const dx = targetCenter.x - currentCenter.x;
-        const dy = targetCenter.y - currentCenter.y;
-        object.position.x += dx;
-        object.position.y += dy;
-      }
-      object.updateMatrixWorld(true);
-      updateBoundsAndColor(object, useStore.getState().bedSize, setModelBounds);
+    const { selectedPrinterProfile, selectedProcessProfile, uploadedFiles, bedCenter } = useStore.getState();
+    if (!selectedPrinterProfile || !selectedProcessProfile) {
+      console.error(
+        'Arrange requires a printer and process profile to be selected (the CLI validates ' +
+        'printer/process compatibility even for an arrange-only, non-slicing invocation).'
+      );
+      return;
     }
 
-    refreshSelectedObjectSnapshot();
-    selectionOutlineRef.current?.update();
+    // Map each on-plate object (keyed by its own file_id, which
+    // uploadedFiles calls file_id too — see fileSlice.ts) to the REAL
+    // uploaded file backing its geometry (source_file_id, shared by
+    // clones) — the backend needs both: file_id to identify which mesh
+    // to move, source_file_id to know which file to actually arrange.
+    const instancePayload = entries
+      .map(({ id }) => {
+        const uploaded = uploadedFiles.find((f) => f.file_id === id);
+        return uploaded ? { instance_id: id, file_id: uploaded.source_file_id } : null;
+      })
+      .filter((v): v is { instance_id: string; file_id: string } => v !== null);
+    if (instancePayload.length === 0) return;
+
+    const effectiveBedCenter = bedCenter ?? { x: 0, y: 0 };
+
+    apiClient
+      .arrangeObjects({
+        instances: instancePayload,
+        printer_profile_path: selectedPrinterProfile.path,
+        process_profile_path: selectedProcessProfile.path,
+        spacing_mm: arrangeSettings.spacing,
+        enable_rotation: arrangeSettings.enableRotation,
+        align_to_y_axis: arrangeSettings.alignToYAxis,
+      })
+      .then((response) => {
+        for (const arranged of response.instances) {
+          const object = meshesRef.current.get(arranged.instance_id);
+          if (!object) continue;
+
+          if (Math.abs(arranged.rotation_z_deg) > 1e-9) {
+            // Rotate about world Z (yaw only — arrange only reorients the
+            // footprint, matching native's 2D nester) to the CLI's
+            // reported absolute angle. Native's arrange always computes
+            // rotation candidates from the object's currently-resolved
+            // footprint at 0/45/90/135 degrees (see libslic3r/Arrange —
+            // fill_config), so setting (not composing onto) the object's
+            // Z rotation matches what the CLI actually did to the mesh
+            // it started from.
+            const targetRad = (arranged.rotation_z_deg * Math.PI) / 180;
+            const euler = new THREE.Euler().setFromQuaternion(object.quaternion, 'ZYX');
+            object.quaternion.setFromEuler(new THREE.Euler(euler.x, euler.y, targetRad, 'ZYX'));
+          }
+
+          // Convert the CLI's bed-absolute mm coordinates (relative to
+          // the printer's own printable_area origin) into the Three.js
+          // scene's origin-centered coordinates — same conversion
+          // PreviewViewport.tsx applies to gcode coordinates, needed
+          // because some printers' bed_shape is not centered at the
+          // origin (see bedCenter's doc comment in profileSlice.ts).
+          object.updateMatrixWorld(true);
+          const box = new THREE.Box3().setFromObject(object);
+          const currentCenter = box.getCenter(new THREE.Vector3());
+          const targetX = arranged.x - effectiveBedCenter.x;
+          const targetY = arranged.y - effectiveBedCenter.y;
+          object.position.x += targetX - currentCenter.x;
+          object.position.y += targetY - currentCenter.y;
+          object.updateMatrixWorld(true);
+          updateBoundsAndColor(object, useStore.getState().bedSize, setModelBounds);
+        }
+
+        refreshSelectedObjectSnapshot();
+        selectionOutlineRef.current?.update();
+        requestRenderRef.current();
+      })
+      .catch((err) => {
+        console.error('Arrange failed:', err);
+      });
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [arrangeRequestId]);
 
@@ -1334,6 +1609,7 @@ export const ThreeViewport: React.FC = () => {
       clearTransformCommand();
       refreshSelectedObjectSnapshot();
       selectionOutlineRef.current?.update();
+      requestRenderRef.current();
       return;
     }
 
@@ -1385,6 +1661,7 @@ export const ThreeViewport: React.FC = () => {
     // Keep the selection outline glued to the mesh's new bounds immediately
     // (the render loop also calls .update(), but this avoids a 1-frame lag).
     selectionOutlineRef.current?.update();
+    requestRenderRef.current();
   }, [
     pendingTransformCommand,
     selectedObjectId,

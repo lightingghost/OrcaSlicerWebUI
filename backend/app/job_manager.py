@@ -25,8 +25,95 @@ import aiosqlite
 
 from app.cli_builder import build_cli_args, resolve_and_guard
 from app.config import Settings
+from app.threemf_io import ProjectObject, parse_stl_bytes, write_3mf
 
 logger = logging.getLogger(__name__)
+
+
+def _build_positioned_project_3mf(
+    instances: list[dict[str, Any]],
+    file_paths: dict[str, Path],
+    output_dir: Path,
+) -> Path:
+    """
+    Build a single .3mf snapshotting every plate object at its LIVE
+    position/rotation/scale (as captured from the Three.js viewport at
+    submit time — see JobRequestModel.instances's doc comment), and
+    return its path.
+
+    Why this exists: this app never sent per-object placement to the CLI
+    at all — Slice/Export always passed the raw uploaded STL files as
+    bare positional CLI arguments (see cli_builder.py's "Input files"
+    section), each landing at whatever raw X/Y its own mesh data happens
+    to occupy. That's harmless for a single object (nothing else on the
+    bed to overlap with), but reliably fails for 2+ objects with
+    CLI_OBJECTS_PARTLY_INSIDE ("Some objects are located over the
+    boundary of the heated bed") once arrange is disabled by default at
+    slice time (see transformSlice.ts's DEFAULT_TRANSFORMS.arrange — this
+    became a live bug only after that default changed from "always
+    auto-arrange" to "off", since auto-arrange used to paper over exactly
+    this gap). Building an actual positioned 3mf and passing THAT as the
+    CLI's sole input — instead of N raw STL args — makes the CLI slice
+    exactly the plate the user sees in the viewport, matching what a
+    native OrcaSlicer session (which always saves/loads real object
+    positions in its own 3mf project state) would do.
+
+    Reuses threemf_io.py (the same module backing the "Download Project"
+    feature — see routers/projects.py) rather than any CLI round-trip,
+    since this is a pure data transformation, not something requiring the
+    CLI's own logic (unlike Arrange's real nesting algorithm).
+
+    Raises:
+        ValueError: an instance's file_id has no known storage path, the
+            file is missing on disk, or its source isn't an STL (the only
+            format threemf_io.py's mesh reader currently supports — same
+            limitation as POST /api/projects/export).
+    """
+    project_objects: list[ProjectObject] = []
+    for instance in instances:
+        file_id = instance["file_id"]
+        stored_path = file_paths.get(file_id)
+        if stored_path is None:
+            raise ValueError(f"File not found: {file_id}")
+        if stored_path.suffix.lower() != ".stl":
+            raise ValueError(
+                f"Only STL-sourced plate objects can be sliced/exported with live "
+                f"positioning right now; unsupported file: {stored_path.name}"
+            )
+        if not stored_path.exists():
+            raise ValueError(f"File missing on disk: {stored_path.name}")
+
+        mesh = parse_stl_bytes(stored_path.read_bytes())
+        project_objects.append(
+            ProjectObject(
+                name=stored_path.name,
+                mesh=mesh,
+                x=instance.get("x", 0.0),
+                y=instance.get("y", 0.0),
+                z=instance.get("z", 0.0),
+                qx=instance.get("qx", 0.0),
+                qy=instance.get("qy", 0.0),
+                qz=instance.get("qz", 0.0),
+                qw=instance.get("qw", 1.0),
+                sx=instance.get("sx", 1.0),
+                sy=instance.get("sy", 1.0),
+                sz=instance.get("sz", 1.0),
+                # This object's own override DELTA (see
+                # JobInstancePlacementModel.config_overrides's doc
+                # comment for why this deliberately does NOT include
+                # anything inherited from Global) — carried through
+                # unchanged into the plate snapshot 3mf's
+                # Metadata/model_settings.config, which is what makes
+                # the actual OrcaSlicer CLI apply it only to THIS object
+                # rather than the whole plate.
+                config_overrides=dict(instance.get("config_overrides") or {}),
+            )
+        )
+
+    data = write_3mf(project_objects)
+    snapshot_path = output_dir / "_plate_snapshot.3mf"
+    snapshot_path.write_bytes(data)
+    return snapshot_path
 
 
 def _build_subprocess_env(orca_cli_path: Path) -> dict[str, str]:
@@ -190,9 +277,31 @@ class JobManager:
                     if row is None:
                         raise ValueError(f"File not found: {file_id}")
                     file_paths[file_id] = Path(row[0])
-        
+
+        # If the request carries live per-object placement (see
+        # JobRequestModel.instances's doc comment / _build_positioned_project_3mf's
+        # doc comment for why this exists), build a single positioned 3mf
+        # snapshot of the plate and slice/export THAT instead of the raw,
+        # unpositioned file_ids — this is what makes the CLI operate on
+        # exactly what the viewport shows rather than each file's own
+        # raw mesh-native origin.
+        instances = job_request.get("instances")
+        effective_job_request = job_request
+        effective_file_paths = file_paths
+        if instances:
+            snapshot_path = _build_positioned_project_3mf(instances, file_paths, output_dir)
+            # Replace the job's file_ids with a single synthetic id
+            # pointing at the snapshot — build_cli_args only ever reads
+            # file_ids through file_paths, so this substitution is
+            # transparent to it and to every other part of the job
+            # pipeline (parameter overrides, transforms, etc. are
+            # unaffected since they don't reference file_ids at all).
+            snapshot_file_id = f"_plate_snapshot_{job_id}"
+            effective_job_request = {**job_request, "file_ids": [snapshot_file_id]}
+            effective_file_paths = {**file_paths, snapshot_file_id: snapshot_path}
+
         # Build CLI args (may raise ValueError on path validation)
-        cli_args = build_cli_args(job_request, self.config, file_paths, output_dir)
+        cli_args = build_cli_args(effective_job_request, self.config, effective_file_paths, output_dir)
         
         # Create job record in database
         async with aiosqlite.connect(self.db_path) as db:

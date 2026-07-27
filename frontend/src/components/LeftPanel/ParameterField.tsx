@@ -66,21 +66,44 @@ function buildTooltip(
 }
 
 export const ParameterField: React.FC<ParameterFieldProps> = ({ descriptor }) => {
-  const { overrides, validationErrors, setOverride, clearOverride, getEffectiveDefault } = useStore();
+  const {
+    validationErrors,
+    objectValidationErrors,
+    setOverride,
+    clearOverride,
+    setObjectOverride,
+    clearObjectOverride,
+    getEffectiveDefault,
+    getEffectiveValueForTarget,
+    processTarget,
+  } = useStore();
 
+  const isObjectTarget = processTarget !== 'global';
   const effectiveDefault = getEffectiveDefault(descriptor);
-  const currentValue = overrides[descriptor.key] ?? effectiveDefault;
-  const error = validationErrors[descriptor.key];
-  const isOverridden = descriptor.key in overrides;
+  const { value: currentValue, isOverriddenAtTarget: isOverridden } = getEffectiveValueForTarget(
+    descriptor,
+    processTarget
+  );
+  const error = isObjectTarget
+    ? objectValidationErrors[processTarget]?.[descriptor.key]
+    : validationErrors[descriptor.key];
   const unit = descriptor.unit;
   const tooltip = buildTooltip(descriptor, effectiveDefault);
 
   const handleChange = (value: string | number | boolean) => {
-    setOverride(descriptor.key, value);
+    if (isObjectTarget) {
+      setObjectOverride(processTarget, descriptor.key, value);
+    } else {
+      setOverride(descriptor.key, value);
+    }
   };
 
   const handleReset = () => {
-    clearOverride(descriptor.key);
+    if (isObjectTarget) {
+      clearObjectOverride(processTarget, descriptor.key);
+    } else {
+      clearOverride(descriptor.key);
+    }
   };
 
   const resetButton = isOverridden ? (

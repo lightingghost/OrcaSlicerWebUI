@@ -1,289 +1,128 @@
 /**
  * Tests for FilamentRow Component
- * 
+ *
  * Validates:
- * - Filament swatches display correctly for selected profiles
- * - Add button opens modal with filament profile list
- * - Remove button removes last filament from array
- * - Integration with profileSlice.toggleFilamentProfile
- * - Disabled states when no manufacturer selected
+ * - Empty state and count label
+ * - FilamentSwatch renders for each selected profile
+ * - Add button (aria-label "Add filament") enabled/disabled state
+ * - Per-swatch remove button
+ * - Color swatch default color
  */
 
 import { describe, it, expect, vi, beforeEach } from 'vitest';
-import { render, screen, fireEvent, waitFor } from '@testing-library/react';
+import { render, screen, fireEvent } from '@testing-library/react';
 import { FilamentRow } from './FilamentRow';
 import { useStore } from '../../store';
 
-// Mock the store
 vi.mock('../../store', () => ({
   useStore: vi.fn(),
 }));
 
+// The modal calls apiClient – mock it to prevent fetch errors in tests
+vi.mock('../../api/client', () => ({
+  apiClient: {
+    getFilamentMetadata: vi.fn().mockResolvedValue({
+      manufacturers: [],
+      material_types: [],
+      filaments: [],
+    }),
+    listFilamentConfigs: vi.fn().mockResolvedValue([]),
+  },
+}));
+
+const mockFilamentProfiles = [
+  { name: 'Generic PLA', path: 'BBL/filament/generic_pla.json', category: 'filament' as const },
+  { name: 'Generic ABS', path: 'BBL/filament/generic_abs.json', category: 'filament' as const },
+  { name: 'Generic PETG', path: 'BBL/filament/generic_petg.json', category: 'filament' as const },
+];
+
+const baseState = {
+  filamentProfiles: mockFilamentProfiles,
+  selectedFilamentProfiles: [],
+  selectedManufacturer: 'BBL',
+  selectedPrinterProfile: null,
+  printerSystemName: null,
+  toggleFilamentProfile: vi.fn(),
+  saveUserConfig: vi.fn().mockResolvedValue(undefined),
+};
+
+beforeEach(() => {
+  vi.clearAllMocks();
+  (useStore as any).mockReturnValue({ ...baseState });
+});
+
 describe('FilamentRow', () => {
-  const mockToggleFilamentProfile = vi.fn();
-
-  const mockFilamentProfiles = [
-    { name: 'Generic PLA', path: 'BBL/filament/generic_pla.json', category: 'filament' as const },
-    { name: 'Generic ABS', path: 'BBL/filament/generic_abs.json', category: 'filament' as const },
-    { name: 'Generic PETG', path: 'BBL/filament/generic_petg.json', category: 'filament' as const },
-  ];
-
-  beforeEach(() => {
-    vi.clearAllMocks();
-  });
-
-  it('should display "No filaments selected" when none are selected', () => {
-    (useStore as any).mockReturnValue({
-      filamentProfiles: mockFilamentProfiles,
-      selectedFilamentProfiles: [],
-      selectedManufacturer: 'BBL',
-      toggleFilamentProfile: mockToggleFilamentProfile,
-    });
-
+  it('shows "No filaments selected" when none are selected', () => {
     render(<FilamentRow />);
-
     expect(screen.getByText('No filaments selected')).toBeInTheDocument();
     expect(screen.getByText('0 selected')).toBeInTheDocument();
   });
 
-  it('should display FilamentSwatch for each selected filament', () => {
-    const selectedFilaments = [mockFilamentProfiles[0], mockFilamentProfiles[1]];
-
+  it('shows a swatch for each selected filament', () => {
     (useStore as any).mockReturnValue({
-      filamentProfiles: mockFilamentProfiles,
-      selectedFilamentProfiles: selectedFilaments,
-      selectedManufacturer: 'BBL',
-      toggleFilamentProfile: mockToggleFilamentProfile,
+      ...baseState,
+      selectedFilamentProfiles: [mockFilamentProfiles[0], mockFilamentProfiles[1]],
     });
-
     render(<FilamentRow />);
-
     expect(screen.getByText('Generic PLA')).toBeInTheDocument();
     expect(screen.getByText('Generic ABS')).toBeInTheDocument();
     expect(screen.getByText('2 selected')).toBeInTheDocument();
   });
 
-  it('should disable Add button when no manufacturer is selected', () => {
-    (useStore as any).mockReturnValue({
-      filamentProfiles: mockFilamentProfiles,
-      selectedFilamentProfiles: [],
-      selectedManufacturer: null,
-      toggleFilamentProfile: mockToggleFilamentProfile,
-    });
-
+  it('disables Add button when no manufacturer is selected', () => {
+    (useStore as any).mockReturnValue({ ...baseState, selectedManufacturer: null });
     render(<FilamentRow />);
-
-    const addButton = screen.getByText('+ Add Filament');
-    expect(addButton).toBeDisabled();
-    expect(addButton).toHaveAttribute('title', 'Select a manufacturer first');
+    const addBtn = screen.getByLabelText('Add filament');
+    expect(addBtn).toBeDisabled();
   });
 
-  it('should disable Add button when no filament profiles are available', () => {
-    (useStore as any).mockReturnValue({
-      filamentProfiles: [],
-      selectedFilamentProfiles: [],
-      selectedManufacturer: 'BBL',
-      toggleFilamentProfile: mockToggleFilamentProfile,
-    });
-
+  it('disables Add button when no filament profiles are available', () => {
+    (useStore as any).mockReturnValue({ ...baseState, filamentProfiles: [] });
     render(<FilamentRow />);
-
-    const addButton = screen.getByText('+ Add Filament');
-    expect(addButton).toBeDisabled();
+    const addBtn = screen.getByLabelText('Add filament');
+    expect(addBtn).toBeDisabled();
   });
 
-  it('should disable Remove button when no filaments are selected', () => {
-    (useStore as any).mockReturnValue({
-      filamentProfiles: mockFilamentProfiles,
-      selectedFilamentProfiles: [],
-      selectedManufacturer: 'BBL',
-      toggleFilamentProfile: mockToggleFilamentProfile,
-    });
-
+  it('enables Add button when manufacturer selected and profiles exist', () => {
     render(<FilamentRow />);
-
-    const removeButton = screen.getByText('− Remove');
-    expect(removeButton).toBeDisabled();
-    expect(removeButton).toHaveAttribute('title', 'No filaments to remove');
+    const addBtn = screen.getByLabelText('Add filament');
+    expect(addBtn).not.toBeDisabled();
   });
 
-  it('should open modal when Add button is clicked', async () => {
-    (useStore as any).mockReturnValue({
-      filamentProfiles: mockFilamentProfiles,
-      selectedFilamentProfiles: [],
-      selectedManufacturer: 'BBL',
-      toggleFilamentProfile: mockToggleFilamentProfile,
-    });
-
+  it('opens modal when Add button is clicked', () => {
     render(<FilamentRow />);
-
-    const addButton = screen.getByText('+ Add Filament');
-    fireEvent.click(addButton);
-
-    await waitFor(() => {
-      expect(screen.getByText('Select Filament Profiles')).toBeInTheDocument();
-    });
-
-    // Modal should show all available filament profiles
-    expect(screen.getByText('Generic PLA')).toBeInTheDocument();
-    expect(screen.getByText('Generic ABS')).toBeInTheDocument();
-    expect(screen.getByText('Generic PETG')).toBeInTheDocument();
+    fireEvent.click(screen.getByLabelText('Add filament'));
+    expect(screen.getByText('Select Filament Profiles')).toBeInTheDocument();
   });
 
-  it('should close modal when close button is clicked', async () => {
+  it('shows per-swatch remove button for selected filaments', () => {
     (useStore as any).mockReturnValue({
-      filamentProfiles: mockFilamentProfiles,
-      selectedFilamentProfiles: [],
-      selectedManufacturer: 'BBL',
-      toggleFilamentProfile: mockToggleFilamentProfile,
+      ...baseState,
+      selectedFilamentProfiles: [mockFilamentProfiles[0]],
     });
-
     render(<FilamentRow />);
-
-    // Open modal
-    fireEvent.click(screen.getByText('+ Add Filament'));
-
-    await waitFor(() => {
-      expect(screen.getByText('Select Filament Profiles')).toBeInTheDocument();
-    });
-
-    // Close modal
-    fireEvent.click(screen.getByLabelText('Close modal'));
-
-    await waitFor(() => {
-      expect(screen.queryByText('Select Filament Profiles')).not.toBeInTheDocument();
-    });
+    expect(screen.getByLabelText('Remove Generic PLA')).toBeInTheDocument();
   });
 
-  it('should close modal when Done button is clicked', async () => {
+  it('calls toggleFilamentProfile when swatch remove is clicked', () => {
+    const toggle = vi.fn();
     (useStore as any).mockReturnValue({
-      filamentProfiles: mockFilamentProfiles,
-      selectedFilamentProfiles: [],
-      selectedManufacturer: 'BBL',
-      toggleFilamentProfile: mockToggleFilamentProfile,
+      ...baseState,
+      selectedFilamentProfiles: [mockFilamentProfiles[0]],
+      toggleFilamentProfile: toggle,
     });
-
     render(<FilamentRow />);
-
-    // Open modal
-    fireEvent.click(screen.getByText('+ Add Filament'));
-
-    await waitFor(() => {
-      expect(screen.getByText('Select Filament Profiles')).toBeInTheDocument();
-    });
-
-    // Click Done
-    fireEvent.click(screen.getByText('Done'));
-
-    await waitFor(() => {
-      expect(screen.queryByText('Select Filament Profiles')).not.toBeInTheDocument();
-    });
+    fireEvent.click(screen.getByLabelText('Remove Generic PLA'));
+    expect(toggle).toHaveBeenCalledWith(mockFilamentProfiles[0]);
   });
 
-  it('should call toggleFilamentProfile when filament is selected in modal', async () => {
+  it('renders color swatch with default gray when no colour specified', () => {
     (useStore as any).mockReturnValue({
-      filamentProfiles: mockFilamentProfiles,
-      selectedFilamentProfiles: [],
-      selectedManufacturer: 'BBL',
-      toggleFilamentProfile: mockToggleFilamentProfile,
+      ...baseState,
+      selectedFilamentProfiles: [mockFilamentProfiles[0]],
     });
-
     render(<FilamentRow />);
-
-    // Open modal
-    fireEvent.click(screen.getByText('+ Add Filament'));
-
-    await waitFor(() => {
-      expect(screen.getByText('Select Filament Profiles')).toBeInTheDocument();
-    });
-
-    // Select a filament
-    const filamentButtons = screen.getAllByText('Generic PLA');
-    const modalButton = filamentButtons.find(
-      (el) => el.closest('.bg-gray-800') !== null
-    );
-    
-    if (modalButton) {
-      fireEvent.click(modalButton);
-    }
-
-    expect(mockToggleFilamentProfile).toHaveBeenCalledWith(mockFilamentProfiles[0]);
-  });
-
-  it('should call toggleFilamentProfile to remove last filament when Remove is clicked', () => {
-    const selectedFilaments = [mockFilamentProfiles[0], mockFilamentProfiles[1]];
-
-    (useStore as any).mockReturnValue({
-      filamentProfiles: mockFilamentProfiles,
-      selectedFilamentProfiles: selectedFilaments,
-      selectedManufacturer: 'BBL',
-      toggleFilamentProfile: mockToggleFilamentProfile,
-    });
-
-    render(<FilamentRow />);
-
-    const removeButton = screen.getByText('− Remove');
-    fireEvent.click(removeButton);
-
-    // Should remove the last filament (Generic ABS)
-    expect(mockToggleFilamentProfile).toHaveBeenCalledWith(mockFilamentProfiles[1]);
-  });
-
-  it('should show selected state in modal for currently selected filaments', async () => {
-    const selectedFilaments = [mockFilamentProfiles[0]];
-
-    (useStore as any).mockReturnValue({
-      filamentProfiles: mockFilamentProfiles,
-      selectedFilamentProfiles: selectedFilaments,
-      selectedManufacturer: 'BBL',
-      toggleFilamentProfile: mockToggleFilamentProfile,
-    });
-
-    render(<FilamentRow />);
-
-    // Open modal
-    fireEvent.click(screen.getByText('+ Add Filament'));
-
-    await waitFor(() => {
-      expect(screen.getByText('Select Filament Profiles')).toBeInTheDocument();
-    });
-
-    // Check that Generic PLA shows as selected
-    const selectedBadges = screen.getAllByText('Selected');
-    expect(selectedBadges.length).toBeGreaterThan(0);
-  });
-
-  it('should display message when no filament profiles are available in modal', async () => {
-    (useStore as any).mockReturnValue({
-      filamentProfiles: [],
-      selectedFilamentProfiles: [],
-      selectedManufacturer: 'BBL',
-      toggleFilamentProfile: mockToggleFilamentProfile,
-    });
-
-    render(<FilamentRow />);
-
-    // Add button should be disabled, but we'll manually trigger modal for testing
-    const component = render(<FilamentRow />);
-    component.rerender(<FilamentRow />);
-
-    // Manually open modal by simulating the state (this tests the modal's empty state)
-    // In real scenario, button would be disabled, but we test the modal content
-  });
-
-  it('should render color swatch with default gray color when no color is specified', () => {
-    const selectedFilaments = [mockFilamentProfiles[0]];
-
-    (useStore as any).mockReturnValue({
-      filamentProfiles: mockFilamentProfiles,
-      selectedFilamentProfiles: selectedFilaments,
-      selectedManufacturer: 'BBL',
-      toggleFilamentProfile: mockToggleFilamentProfile,
-    });
-
-    render(<FilamentRow />);
-
-    // Find the color swatch element
+    // The aria-label is "Color: #8B8B8B" (default gray)
     const swatch = screen.getByLabelText(/Color:/);
     expect(swatch).toHaveStyle({ backgroundColor: '#8B8B8B' });
   });

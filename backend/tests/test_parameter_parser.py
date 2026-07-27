@@ -9,9 +9,13 @@ Requirements validated: 3.1
 """
 
 import json
+import sys
 import pytest
 from pathlib import Path
-from app.parameter_parser import ParameterParser
+
+# parameter_parser.py now lives in scripts/, not backend/app/
+sys.path.insert(0, str(Path(__file__).parent.parent.parent / "scripts"))
+from parameter_parser import ParameterParser
 
 
 @pytest.fixture
@@ -340,7 +344,7 @@ class TestTypeMapping:
     
     def test_type_mapping_is_defined(self):
         """Test that TYPE_MAPPING is properly defined."""
-        from app.parameter_parser import ParameterParser
+        from parameter_parser import ParameterParser
         
         assert hasattr(ParameterParser, 'TYPE_MAPPING')
         assert isinstance(ParameterParser.TYPE_MAPPING, dict)
@@ -348,7 +352,7 @@ class TestTypeMapping:
     
     def test_all_mapped_types_are_valid(self):
         """Test that all mapped types are valid API types."""
-        from app.parameter_parser import ParameterParser
+        from parameter_parser import ParameterParser
         
         valid_types = {'float', 'int', 'bool', 'enum', 'string'}
         
@@ -358,7 +362,7 @@ class TestTypeMapping:
     
     def test_common_cpp_types_are_mapped(self):
         """Test that common C++ config types are mapped."""
-        from app.parameter_parser import ParameterParser
+        from parameter_parser import ParameterParser
         
         expected_types = ['coFloat', 'coInt', 'coBool', 'coString', 'coEnum', 'coPercent']
         
@@ -372,14 +376,14 @@ class TestCategoryMapping:
     
     def test_category_mapping_is_defined(self):
         """Test that CATEGORY_TO_SECTION is properly defined."""
-        from app.parameter_parser import ParameterParser
+        from parameter_parser import ParameterParser
         
         assert hasattr(ParameterParser, 'CATEGORY_TO_SECTION')
         assert isinstance(ParameterParser.CATEGORY_TO_SECTION, dict)
     
     def test_all_mapped_sections_are_valid(self):
         """Test that all mapped sections are valid."""
-        from app.parameter_parser import ParameterParser
+        from parameter_parser import ParameterParser
         
         valid_sections = {'quality', 'strength', 'speed', 'support', 'multi_material', 'gcode', 'other'}
         
@@ -389,7 +393,7 @@ class TestCategoryMapping:
     
     def test_common_categories_are_mapped(self):
         """Test that common categories are mapped."""
-        from app.parameter_parser import ParameterParser
+        from parameter_parser import ParameterParser
         
         expected_categories = ['Quality', 'Strength', 'Speed', 'Support']
         

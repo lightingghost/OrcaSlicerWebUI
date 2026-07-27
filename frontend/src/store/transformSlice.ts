@@ -43,25 +43,33 @@ export interface TransformSlice {
 // of real-world files. Defaulting this to `true` here is what actually
 // reproduces native's real end-to-end behavior (GUI-imported objects are
 // always on-bed by the time they're sliced), not a deviation from it.
-// NOTE on arrange's default: native's CLI (OrcaSlicer.cpp) initializes
-// `need_arrange = true` before any `--arrange` flag is processed — i.e.
-// native auto-arranges by default. `--arrange=0` is a special opt-OUT
-// ("0 means disable" per the flag's own `arrange_option == 0` handling),
-// and `--arrange=2` ("others means auto, keep the original logic")
-// reproduces that same default explicitly. This app previously defaulted
-// to `0` (auto-arrange disabled), which — combined with never sending the
-// viewport's actual X/Y object placement to the backend (see
-// ensure_on_bed's comment above for the same root issue on the Z axis) —
-// meant an object could be sliced at whatever raw X/Y the uploaded file
-// happens to contain, entirely outside the bed, with nothing to correct
-// it. Defaulting to `2` (native's own "auto" value) matches native's real
-// default behavior instead of opting out of it.
+// NOTE on arrange's default: previously defaulted to `2` (native's CLI
+// "auto" value — `need_arrange = true` by default in OrcaSlicer.cpp
+// before any `--arrange` flag is processed), on the reasoning that since
+// the viewport's actual X/Y object placement was never sent to the
+// backend at slice time, auto-arranging was the only way to guarantee
+// objects landed on the bed rather than at whatever raw X/Y the uploaded
+// file happens to contain.
+//
+// That reasoning no longer applies: the Prepare tab's Arrange button
+// (ViewportTransformToolbar) now calls the REAL OrcaSlicer CLI's own
+// arrange algorithm directly (see backend/app/routers/arrange.py) and
+// applies its result to the actual objects on the plate, so by the time
+// the user clicks Slice, objects are already correctly positioned via an
+// explicit, visible action — not a slice-time side effect the user didn't
+// ask for. Auto-arranging again during Slice would silently re-shuffle
+// object positions the user just deliberately arranged (or manually
+// placed by hand), which is surprising and not what "Slice" should do.
+// Defaulting to `0` (disabled) makes Slice slice the plate as arranged,
+// matching the explicit request to not auto-arrange at slice time; the
+// user can still opt back into auto-arrange-on-slice via the Job
+// Options > Transform panel's Arrange Mode dropdown.
 const DEFAULT_TRANSFORMS: TransformOptions = {
   rotate: 0,
   rotate_x: 0,
   rotate_y: 0,
   scale: 1,
-  arrange: 2,
+  arrange: 0,
   orient: 0,
   repetitions: 1,
   ensure_on_bed: true,

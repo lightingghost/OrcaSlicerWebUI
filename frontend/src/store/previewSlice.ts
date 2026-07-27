@@ -1,12 +1,14 @@
 import { StateCreator } from 'zustand';
 import { parseGcode, ParsedGcode } from '../lib/gcodeParser';
 
-export type MainTab = 'prepare' | 'preview' | 'device' | 'project' | 'calibration';
+export type MainTab = 'prepare' | 'preview' | 'device';
 
 export interface PreviewSlice {
-  /** Which top-level tab is active (Prepare | Preview | Device | Project |
-   * Calibration). Lives in the store (rather than component-local state,
-   * as it used to before this feature) so job completion can drive it
+  /** Which top-level tab is active (Prepare | Preview | Device). "Project"
+   * and "Calibration" were removed — project actions (New/Import/Download)
+   * are now top bar buttons rather than a separate tab, and Calibration
+   * was unused. Lives in the store (rather than component-local state, as
+   * it used to before this feature) so job completion can drive it
    * directly — see jobSlice's onCompleted/polling handlers, which call
    * `setActiveTab('preview')` the moment a slice job finishes, matching
    * native OrcaSlicer switching to its Preview tab automatically once

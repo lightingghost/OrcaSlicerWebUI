@@ -718,12 +718,40 @@ export const createProfileSlice: StateCreator<
         manufacturer = printerPath.split('/')[0];
       }
 
+      // Pull in any pending (unsaved) dialog/parameter-panel edits so the
+      // persisted yaml carries the actual in-progress config, not just a
+      // pointer to the unmodified base profile. Each autosave may not
+      // exist yet (404) — that's the normal "no pending edits" case.
+      const [printerAutosave, processAutosave, filamentAutosaves] = await Promise.all([
+        apiClient.getAutosave('printer_config').catch(() => null),
+        apiClient.getAutosave('process_config').catch(() => null),
+        Promise.all(
+          state.selectedFilamentProfiles.map((_, idx) =>
+            apiClient.getAutosave(`filament_${idx + 1}`).catch(() => null)
+          )
+        ),
+      ]);
+
       const config = {
         selected_manufacturer: manufacturer,
         selected_printer_profile_path: state.selectedPrinterProfile?.path || null,
         selected_bed_type: state.selectedBedType,
         selected_process_profile_path: state.selectedProcessProfile?.path || null,
         selected_filament_profile_paths: state.selectedFilamentProfiles.map(p => p.path),
+        printer_config_autosave: printerAutosave,
+        process_config_autosave: processAutosave,
+        filament_config_autosaves: filamentAutosaves,
+        // Per-object process overrides already live directly in the store
+        // (parameterSlice's objectOverrides), unlike the printer/process/
+        // filament dialogs' edits above, so there's no need to round-trip
+        // through /api/autosave here — this just mirrors that in-memory
+        // state into user_config.yaml as the "pointer to the config
+        // files" the user asked for, keyed by file_id. The actual
+        // restore-on-load path (see ConfigAutoSave.tsx) reads each
+        // object's own process_config_object_{file_id} autosave directly,
+        // which is more robust to the plate's contents changing between
+        // saves than replaying this yaml snapshot would be.
+        object_config_autosaves: state.objectOverrides,
       };
       
       await apiClient.saveUserConfig(config);

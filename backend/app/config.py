@@ -143,9 +143,14 @@ class Settings(BaseSettings):
 
     @property
     def profiles_root(self) -> Path:
-        """Path to OrcaSlicer resources/profiles directory."""
-        cli_dir = self.orca_cli_path.parent      # .../build/linux
-        orca_root = cli_dir.parent.parent         # .../OrcaSlicer
+        """Path to OrcaSlicer resources/profiles directory.
+
+        The CLI binary lives at <squashfs-root>/bin/orca-slicer, so
+        parent  → <squashfs-root>/bin
+        parent  → <squashfs-root>
+        → <squashfs-root>/resources/profiles
+        """
+        orca_root = self.orca_cli_path.parent.parent   # squashfs-root/
         return orca_root / "resources" / "profiles"
 
     @property

@@ -24,6 +24,16 @@ def client():
     # Set environment variables
     os.environ['API_SECRET'] = 'test-secret-key-12345'
     os.environ['ORCA_CLI_PATH'] = '/home/odin/local/orcaslicerWebUI/OrcaSlicer/build/linux/release/OrcaSlicer_ubu64'
+
+    # Force app.config's Settings() singleton to be rebuilt from the env
+    # vars just set — otherwise, if an earlier test file in this session
+    # already imported app.config, it (and everything that already did
+    # `from app.config import settings`) keeps using whichever env vars
+    # were current at THAT import, silently ignoring the ones set above.
+    import sys
+    for mod in list(sys.modules):
+        if mod == 'app' or mod.startswith('app.'):
+            del sys.modules[mod]
     
     # Import after setting env vars
     from app.main import app
@@ -109,11 +119,24 @@ def test_get_profile_content_path_traversal_attempt(client, auth_headers):
     Test that path traversal attempts are blocked.
     
     Verifies that the resolve_and_guard function prevents directory traversal.
+
+    NOTE: httpx (which TestClient wraps) normalizes ".." segments in the URL
+    *client-side* before the request is even sent — e.g. requesting
+    "/api/profiles/BBL/machine/../../../etc/passwd" actually sends a request
+    for "/etc/passwd" (verified directly against httpx.URL), which no longer
+    contains "..", exercises a completely different (nonexistent) route, and
+    would 404 for a reason unrelated to path-traversal defense at all. A raw
+    HTTP client (curl, netcat, or a client using --path-as-is) sends the
+    dots on the wire unmodified, so the payload below is percent-encoded
+    (%2e%2e) specifically to survive httpx's client-side normalization and
+    reach the server with the traversal attempt intact — this is what
+    actually exercises resolve_and_guard's defense in cli_builder.py.
     """
-    # Try various path traversal techniques
+    # Percent-encoded ".." so httpx's client-side URL normalization does not
+    # collapse the traversal before the request is sent (see note above).
     traversal_attempts = [
-        "../../../etc/passwd",
-        "../../Prusa/machine/../../../../../../etc/passwd",
+        "%2e%2e/%2e%2e/%2e%2e/etc/passwd",
+        "%2e%2e/%2e%2e/Prusa/machine/%2e%2e/%2e%2e/%2e%2e/%2e%2e/%2e%2e/%2e%2e/etc/passwd",
         "..%2F..%2F..%2Fetc%2Fpasswd",
     ]
     

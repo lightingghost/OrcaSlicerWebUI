@@ -3,6 +3,7 @@ import Layout from './components/Layout/Layout'
 import SlicerPage from './pages/SlicerPage'
 import JobHistory from './pages/JobHistory'
 import { ConfigAutoSave } from './components/ConfigAutoSave'
+import { ProjectAutoSave } from './components/ProjectAutoSave'
 import { RouteErrorBoundary } from './components/RouteErrorBoundary'
 
 const router = createBrowserRouter([
@@ -30,6 +31,7 @@ function App() {
   return (
     <>
       <ConfigAutoSave />
+      <ProjectAutoSave />
       <RouterProvider router={router} />
     </>
   )

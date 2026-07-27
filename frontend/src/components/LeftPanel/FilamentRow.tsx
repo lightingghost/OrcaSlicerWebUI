@@ -392,20 +392,13 @@ export const FilamentRow: React.FC = () => {
     selectedPrinterProfile,
     printerSystemName,
     toggleFilamentProfile,
-    saveUserConfig,
   } = useStore();
 
   const [isModalOpen, setIsModalOpen] = useState(false);
   const [editingFilament, setEditingFilament] = useState<{ profile: { name: string; path: string }; index: number } | null>(null);
 
-  // Auto-save when filament profiles change
-  useEffect(() => {
-    if (selectedFilamentProfiles.length > 0) {
-      saveUserConfig().catch(err => {
-        console.error('Failed to auto-save config:', err);
-      });
-    }
-  }, [selectedFilamentProfiles, saveUserConfig]);
+  // Note: auto-save on filament selection change is handled centrally by
+  // ConfigAutoSave.tsx (debounced), avoiding duplicate saveUserConfig() calls.
 
   const handleAddFilament = () => {
     if (filamentProfiles.length === 0) {

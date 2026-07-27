@@ -25,24 +25,64 @@ vi.mock('../../store', () => ({
 describe('ParameterField', () => {
   const mockSetOverride = vi.fn();
   const mockClearOverride = vi.fn();
+  const mockSetObjectOverride = vi.fn();
+  const mockClearObjectOverride = vi.fn();
   // Mirrors parameterSlice's real getEffectiveDefault: profile-loaded value
   // if present, otherwise the descriptor's global default_value.
   const mockGetEffectiveDefault = vi.fn(
     (descriptor: ParameterDescriptor) => descriptor.default_value
   );
 
-  const defaultStoreState = {
-    overrides: {},
-    validationErrors: {},
-    profileDefaults: {},
-    setOverride: mockSetOverride,
-    clearOverride: mockClearOverride,
-    getEffectiveDefault: mockGetEffectiveDefault,
-  };
+  type MockOverrides = Partial<{
+    overrides: Record<string, unknown>;
+    validationErrors: Record<string, string>;
+    objectOverrides: Record<string, Record<string, unknown>>;
+    objectValidationErrors: Record<string, Record<string, string>>;
+    processTarget: string;
+    getEffectiveDefault: (d: ParameterDescriptor) => unknown;
+  }>;
+
+  /**
+   * Builds a full mock store state, given optional overrides for the
+   * fields these tests actually vary. `getEffectiveValueForTarget` is
+   * derived FROM the merged `overrides`/`getEffectiveDefault` (mirroring
+   * parameterSlice's real implementation for the 'global' target, the
+   * only target these tests exercise), rather than being a fixed mock —
+   * a plain getter-on-spread approach doesn't work here since spreading
+   * a getter evaluates it once against the ORIGINAL object, not the
+   * overridden fields.
+   */
+  function buildMockStoreState(overrides: MockOverrides = {}) {
+    const mergedOverrides = overrides.overrides ?? {};
+    const mergedGetEffectiveDefault = overrides.getEffectiveDefault ?? mockGetEffectiveDefault;
+
+    return {
+      overrides: mergedOverrides,
+      validationErrors: overrides.validationErrors ?? {},
+      objectOverrides: overrides.objectOverrides ?? {},
+      objectValidationErrors: overrides.objectValidationErrors ?? {},
+      processTarget: overrides.processTarget ?? 'global',
+      profileDefaults: {},
+      setOverride: mockSetOverride,
+      clearOverride: mockClearOverride,
+      setObjectOverride: mockSetObjectOverride,
+      clearObjectOverride: mockClearObjectOverride,
+      getEffectiveDefault: mergedGetEffectiveDefault,
+      getEffectiveValueForTarget: (descriptor: ParameterDescriptor) => {
+        const overrideValue = mergedOverrides[descriptor.key];
+        if (overrideValue !== undefined) {
+          return { value: overrideValue, isOverriddenAtTarget: true };
+        }
+        return { value: mergedGetEffectiveDefault(descriptor), isOverriddenAtTarget: false };
+      },
+    };
+  }
+
+  const defaultStoreState = buildMockStoreState();
 
   beforeEach(() => {
     vi.clearAllMocks();
-    (useStore as unknown as ReturnType<typeof vi.fn>).mockReturnValue(defaultStoreState);
+    (useStore as unknown as ReturnType<typeof vi.fn>).mockReturnValue(buildMockStoreState());
   });
 
   describe('Float Parameter', () => {
@@ -97,10 +137,9 @@ describe('ParameterField', () => {
     });
 
     it('displays validation error when present', () => {
-      (useStore as unknown as ReturnType<typeof vi.fn>).mockReturnValue({
-        ...defaultStoreState,
-        validationErrors: { layer_height: 'Value must be at least 0.05' },
-      });
+      (useStore as unknown as ReturnType<typeof vi.fn>).mockReturnValue(
+        buildMockStoreState({ validationErrors: { layer_height: 'Value must be at least 0.05' } })
+      );
 
       render(<ParameterField descriptor={floatDescriptor} />);
 
@@ -111,10 +150,9 @@ describe('ParameterField', () => {
     });
 
     it('shows reset button when overridden', () => {
-      (useStore as unknown as ReturnType<typeof vi.fn>).mockReturnValue({
-        ...defaultStoreState,
-        overrides: { layer_height: 0.3 },
-      });
+      (useStore as unknown as ReturnType<typeof vi.fn>).mockReturnValue(
+        buildMockStoreState({ overrides: { layer_height: 0.3 } })
+      );
 
       render(<ParameterField descriptor={floatDescriptor} />);
 
@@ -124,10 +162,9 @@ describe('ParameterField', () => {
 
     it('calls clearOverride when reset button clicked', async () => {
       const user = userEvent.setup();
-      (useStore as unknown as ReturnType<typeof vi.fn>).mockReturnValue({
-        ...defaultStoreState,
-        overrides: { layer_height: 0.3 },
-      });
+      (useStore as unknown as ReturnType<typeof vi.fn>).mockReturnValue(
+        buildMockStoreState({ overrides: { layer_height: 0.3 } })
+      );
 
       render(<ParameterField descriptor={floatDescriptor} />);
 
@@ -207,10 +244,9 @@ describe('ParameterField', () => {
     });
 
     it('displays overridden boolean value', () => {
-      (useStore as unknown as ReturnType<typeof vi.fn>).mockReturnValue({
-        ...defaultStoreState,
-        overrides: { enable_support: true },
-      });
+      (useStore as unknown as ReturnType<typeof vi.fn>).mockReturnValue(
+        buildMockStoreState({ overrides: { enable_support: true } })
+      );
 
       render(<ParameterField descriptor={boolDescriptor} />);
 
@@ -258,10 +294,9 @@ describe('ParameterField', () => {
     });
 
     it('displays overridden enum value', () => {
-      (useStore as unknown as ReturnType<typeof vi.fn>).mockReturnValue({
-        ...defaultStoreState,
-        overrides: { infill_pattern: 'honeycomb' },
-      });
+      (useStore as unknown as ReturnType<typeof vi.fn>).mockReturnValue(
+        buildMockStoreState({ overrides: { infill_pattern: 'honeycomb' } })
+      );
 
       render(<ParameterField descriptor={enumDescriptor} />);
 
@@ -327,10 +362,9 @@ describe('ParameterField', () => {
         section: 'quality',
       };
 
-      (useStore as unknown as ReturnType<typeof vi.fn>).mockReturnValue({
-        ...defaultStoreState,
-        overrides: { layer_height: 0.3 },
-      });
+      (useStore as unknown as ReturnType<typeof vi.fn>).mockReturnValue(
+        buildMockStoreState({ overrides: { layer_height: 0.3 } })
+      );
 
       render(<ParameterField descriptor={floatDescriptor} />);
 
@@ -350,10 +384,9 @@ describe('ParameterField', () => {
     };
 
     it('shows the profile-loaded value (not the global default) when no user override exists', () => {
-      (useStore as unknown as ReturnType<typeof vi.fn>).mockReturnValue({
-        ...defaultStoreState,
-        getEffectiveDefault: () => 0.28,
-      });
+      (useStore as unknown as ReturnType<typeof vi.fn>).mockReturnValue(
+        buildMockStoreState({ getEffectiveDefault: () => 0.28 })
+      );
 
       render(<ParameterField descriptor={floatDescriptor} />);
 
@@ -365,10 +398,9 @@ describe('ParameterField', () => {
     });
 
     it('includes the profile-loaded value as "Default" in the tooltip', () => {
-      (useStore as unknown as ReturnType<typeof vi.fn>).mockReturnValue({
-        ...defaultStoreState,
-        getEffectiveDefault: () => 0.28,
-      });
+      (useStore as unknown as ReturnType<typeof vi.fn>).mockReturnValue(
+        buildMockStoreState({ getEffectiveDefault: () => 0.28 })
+      );
 
       render(<ParameterField descriptor={floatDescriptor} />);
 
@@ -377,11 +409,9 @@ describe('ParameterField', () => {
     });
 
     it('a user override still takes precedence over the profile-loaded default', () => {
-      (useStore as unknown as ReturnType<typeof vi.fn>).mockReturnValue({
-        ...defaultStoreState,
-        overrides: { layer_height: 0.35 },
-        getEffectiveDefault: () => 0.28,
-      });
+      (useStore as unknown as ReturnType<typeof vi.fn>).mockReturnValue(
+        buildMockStoreState({ overrides: { layer_height: 0.35 }, getEffectiveDefault: () => 0.28 })
+      );
 
       render(<ParameterField descriptor={floatDescriptor} />);
 

@@ -13,6 +13,7 @@ import { Save } from 'lucide-react';
 import { useStore } from '../../store';
 import { apiClient, PrinterConfigEntry } from '../../api/client';
 import type { ProfileEntry } from '../../store';
+import { ProcessObjectsList } from './ProcessObjectsList';
 
 // ---------------------------------------------------------------------------
 // Save As dialog
@@ -67,11 +68,21 @@ export const ProcessSelector: React.FC = () => {
     printerSystemName,
     selectProcessProfile,
     fetchCompatibleProcessProfiles,
-    saveUserConfig,
     overrides,
+    processTarget,
+    setProcessTarget,
   } = useStore();
 
-  const [globalObjectsEnabled, setGlobalObjectsEnabled] = useState(true);
+  // Global/Objects toggle (matches native OrcaSlicer's Process panel):
+  // "Global" shows/edits the plate-wide overrides map (this component's
+  // existing profile dropdown + ParameterTabs below read `overrides`
+  // directly); "Objects" replaces the dropdown with a per-object list
+  // (ProcessObjectsList) and ParameterTabs switches to editing whichever
+  // object is selected there. Derived from parameterSlice's
+  // `processTarget` rather than owning separate local state, so
+  // selecting an object elsewhere (e.g. clicking it in the viewport
+  // could set processTarget in the future) keeps this toggle in sync.
+  const isObjectsMode = processTarget !== 'global';
   const [isLoading, setIsLoading] = useState(false);
   // Track which printer name we last loaded profiles for to avoid redundant fetches
   const loadedForPrinter = useRef<string | null>(null);
@@ -106,12 +117,8 @@ export const ProcessSelector: React.FC = () => {
       .finally(() => setIsLoading(false));
   }, [printerSystemName, selectedPrinterProfile, fetchCompatibleProcessProfiles]);
 
-  // Auto-save when process profile changes
-  useEffect(() => {
-    if (selectedProcessProfile) {
-      saveUserConfig().catch(err => console.error('Failed to auto-save config:', err));
-    }
-  }, [selectedProcessProfile, saveUserConfig]);
+  // Note: auto-save on process profile change is handled centrally by
+  // ConfigAutoSave.tsx (debounced), avoiding duplicate saveUserConfig() calls.
 
   const handleProcessChange = (e: React.ChangeEvent<HTMLSelectElement>) => {
     const value = e.target.value;
@@ -156,88 +163,121 @@ export const ProcessSelector: React.FC = () => {
 
   const noProfiles = processProfiles.length === 0 && userProcessConfigs.length === 0;
 
+  const handleSwitchToObjectsMode = () => {
+    if (isObjectsMode) return;
+    // Default to the first plate object so switching to "Objects"
+    // immediately shows a real object's settings (and highlights it in
+    // the viewport) rather than an empty list with no active row —
+    // matches native, which auto-selects the first object on mode switch.
+    // Falls back to staying on 'global' (ProcessObjectsList still renders,
+    // just with no row selected) if the plate is empty.
+    const firstFileId = useStore.getState().uploadedFiles[0]?.file_id;
+    if (firstFileId) {
+      setProcessTarget(firstFileId);
+      useStore.getState().setSelectedObjectId(firstFileId);
+    } else {
+      setProcessTarget('objects-mode-no-selection');
+    }
+  };
+
   return (
     <div className="space-y-3">
-      <div className="min-w-0">
-        <label htmlFor="process-profile" className="block text-xs font-medium text-gray-400 mb-1">
-          Process Profile
-          {!isLoading && selectedPrinterProfile && processProfiles.length > 0 && (
-            <span className="ml-2 text-xs text-gray-500">
-              ({processProfiles.length} compatible)
-            </span>
-          )}
-        </label>
-
-        <div className="flex items-center gap-2 min-w-0">
-          <select
-            id="process-profile"
-            value={selectedProcessProfile?.path || ''}
-            onChange={handleProcessChange}
-            disabled={!selectedManufacturer || isLoading}
-            className="min-w-0 flex-1 w-0 px-2 py-1.5 text-sm bg-gray-700 border border-gray-600
-              rounded text-white focus:outline-none focus:ring-2 focus:ring-purple-500
-              disabled:opacity-50 disabled:cursor-not-allowed"
-          >
-            <option value="">
-              {isLoading
-                ? 'Loading compatible profiles…'
-                : noProfiles
-                  ? (selectedPrinterProfile ? 'No compatible process profiles' : 'No process profiles available')
-                  : 'Select process profile'}
-            </option>
-
-            {processProfiles.length > 0 && (
-              <optgroup label="System profiles">
-                {processProfiles.map(profile => (
-                  <option key={profile.path} value={profile.path}>
-                    {profile.name}
-                  </option>
-                ))}
-              </optgroup>
-            )}
-
-            {userProcessConfigs.length > 0 && (
-              <optgroup label="My saved configs">
-                {userProcessConfigs.map(cfg => (
-                  <option key={`user:${cfg.path}`} value={`user:${cfg.path}`}>
-                    {cfg.name}
-                  </option>
-                ))}
-              </optgroup>
-            )}
-          </select>
-
+      {/* Global/Objects toggle — matches native OrcaSlicer's Process
+          panel pill switch. "Global" shows the profile dropdown below
+          (plate-wide settings); "Objects" replaces it with a per-object
+          list (ProcessObjectsList) so each object's own overrides can be
+          edited — see parameterSlice.ts's processTarget doc comment. */}
+      <div className="flex items-center justify-center">
+        <div className="inline-flex bg-gray-900 border border-gray-700 rounded-full p-0.5" role="tablist" aria-label="Process target">
           <button
-            onClick={() => setSaveAsOpen(true)}
-            disabled={!selectedProcessProfile || saveStatus === 'saving'}
-            title={selectedProcessProfile ? 'Save process config' : 'Select a profile first'}
-            className="flex items-center gap-1 px-2 py-1.5 rounded text-sm bg-gray-700 border
-              border-gray-600 text-gray-400 hover:text-white hover:bg-gray-600
-              disabled:opacity-30 disabled:cursor-not-allowed transition-colors flex-shrink-0"
+            type="button"
+            role="tab"
+            aria-selected={!isObjectsMode}
+            onClick={() => setProcessTarget('global')}
+            className={`px-3 py-1 text-xs font-medium rounded-full transition-colors ${
+              !isObjectsMode ? 'bg-gray-600 text-white' : 'text-gray-400 hover:text-gray-200'
+            }`}
           >
-            <Save className="w-3.5 h-3.5" />
-            {saveStatus === 'saving' ? '…' : saveStatus === 'saved' ? '✓' : saveStatus === 'error' ? '!' : ''}
+            Global
+          </button>
+          <button
+            type="button"
+            role="tab"
+            aria-selected={isObjectsMode}
+            onClick={handleSwitchToObjectsMode}
+            className={`px-3 py-1 text-xs font-medium rounded-full transition-colors ${
+              isObjectsMode ? 'bg-teal-600 text-white' : 'text-gray-400 hover:text-gray-200'
+            }`}
+          >
+            Objects
           </button>
         </div>
-
-        {!selectedPrinterProfile && (
-          <p className="text-xs text-gray-500 mt-1">
-            Select a printer to filter compatible profiles
-          </p>
-        )}
       </div>
 
-      <div>
-        <label className="flex items-center space-x-2 cursor-pointer group">
-          <input type="checkbox" id="global-objects-toggle"
-            checked={globalObjectsEnabled} onChange={e => setGlobalObjectsEnabled(e.target.checked)}
-            className="w-4 h-4 bg-gray-700 border border-gray-600 rounded focus:ring-2
-              focus:ring-purple-500 text-purple-600 cursor-pointer" />
-          <span className="text-xs text-gray-300 group-hover:text-white transition-colors">
-            Enable Global Objects
-          </span>
-        </label>
-      </div>
+      {!isObjectsMode ? (
+        <div className="min-w-0">
+          {/* Visible "Process Profile" label and the "Select a printer to
+              filter compatible profiles" hint were removed to save vertical
+              space in the left panel (native OrcaSlicer's own Process
+              section has no such label either — just the dropdown itself
+              under the "Process" section heading). The select keeps an
+              aria-label so it's still identified for accessibility/tests. */}
+          <div className="flex items-center gap-2 min-w-0">
+            <select
+              id="process-profile"
+              aria-label="Process Profile"
+              value={selectedProcessProfile?.path || ''}
+              onChange={handleProcessChange}
+              disabled={!selectedManufacturer || isLoading}
+              className="min-w-0 flex-1 w-0 px-2 py-1.5 text-sm bg-gray-700 border border-gray-600
+                rounded text-white focus:outline-none focus:ring-2 focus:ring-purple-500
+                disabled:opacity-50 disabled:cursor-not-allowed"
+            >
+              <option value="">
+                {isLoading
+                  ? 'Loading compatible profiles…'
+                  : noProfiles
+                    ? (selectedPrinterProfile ? 'No compatible process profiles' : 'No process profiles available')
+                    : 'Select process profile'}
+              </option>
+
+              {processProfiles.length > 0 && (
+                <optgroup label="System profiles">
+                  {processProfiles.map(profile => (
+                    <option key={profile.path} value={profile.path}>
+                      {profile.name}
+                    </option>
+                  ))}
+                </optgroup>
+              )}
+
+              {userProcessConfigs.length > 0 && (
+                <optgroup label="My saved configs">
+                  {userProcessConfigs.map(cfg => (
+                    <option key={`user:${cfg.path}`} value={`user:${cfg.path}`}>
+                      {cfg.name}
+                    </option>
+                  ))}
+                </optgroup>
+              )}
+            </select>
+
+            <button
+              onClick={() => setSaveAsOpen(true)}
+              disabled={!selectedProcessProfile || saveStatus === 'saving'}
+              title={selectedProcessProfile ? 'Save process config' : 'Select a profile first'}
+              className="flex items-center gap-1 px-2 py-1.5 rounded text-sm bg-gray-700 border
+                border-gray-600 text-gray-400 hover:text-white hover:bg-gray-600
+                disabled:opacity-30 disabled:cursor-not-allowed transition-colors flex-shrink-0"
+            >
+              <Save className="w-3.5 h-3.5" />
+              {saveStatus === 'saving' ? '…' : saveStatus === 'saved' ? '✓' : saveStatus === 'error' ? '!' : ''}
+            </button>
+          </div>
+        </div>
+      ) : (
+        <ProcessObjectsList />
+      )}
 
       <SaveAsDialog isOpen={saveAsOpen} defaultName={saveDefaultName}
         onConfirm={handleSaveConfirm} onCancel={() => setSaveAsOpen(false)} />

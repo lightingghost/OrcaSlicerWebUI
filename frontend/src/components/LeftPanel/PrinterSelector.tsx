@@ -215,7 +215,6 @@ export const PrinterSelector: React.FC = () => {
     fetchAllProfiles,
     selectPrinterProfile,
     selectBedType,
-    saveUserConfig,
     userPrinterConfigs,
     fetchUserPrinterConfigs,
     printerVariant,
@@ -277,14 +276,8 @@ export const PrinterSelector: React.FC = () => {
     }
   }, [isModalOpen, fetchUserPrinterConfigs]);
 
-  // Auto-save when printer profile or bed type changes
-  useEffect(() => {
-    if (selectedPrinterProfile || selectedBedType) {
-      saveUserConfig().catch(err => {
-        console.error('Failed to auto-save config:', err);
-      });
-    }
-  }, [selectedPrinterProfile, selectedBedType, saveUserConfig]);
+  // Note: auto-save on printer/bed-type change is handled centrally by
+  // ConfigAutoSave.tsx (debounced), avoiding duplicate saveUserConfig() calls.
 
   // Parse selected printer info — model name only (nozzle comes from printerVariant)
   const selectedPrinterInfo = useMemo(() => {

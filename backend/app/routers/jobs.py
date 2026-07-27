@@ -83,6 +83,57 @@ class ActionFlags(BaseModel):
     enable_timelapse: Optional[bool] = None
 
 
+class JobInstancePlacementModel(BaseModel):
+    """
+    One plate object's live placement, captured from the Three.js scene
+    at submit time (see frontend/src/store/jobSlice.ts's
+    JobInstancePlacement doc comment for the full rationale).
+
+    `instance_id` is the per-plate-object id (unique even for clones);
+    `file_id` is the real uploaded file backing its geometry. Both are
+    required so the backend can (a) know which real STL to read the
+    mesh from, and (b) disambiguate multiple plate instances that share
+    the same underlying file — mirrors routers/arrange.py's
+    PlateInstanceModel exactly.
+    """
+
+    model_config = ConfigDict(strict=True)
+
+    instance_id: str
+    file_id: str
+    x: float
+    y: float
+    z: float = 0.0
+    qx: float = 0.0
+    qy: float = 0.0
+    qz: float = 0.0
+    qw: float = 1.0
+    sx: float = 1.0
+    sy: float = 1.0
+    sz: float = 1.0
+    # This instance's own per-object process (print) config overrides —
+    # i.e. exactly parameterSlice's objectOverrides[fileId] for this
+    # object, and NOTHING merged in from Global. This is deliberate: a
+    # Global override already applies to the WHOLE plate via the
+    # existing top-level `parameter_overrides` (CLI flags), so every
+    # object already inherits it without needing anything written here
+    # (this is what satisfies "if I add brim in Global, all objects
+    # should have brim" — no per-object embedding required for that
+    # case at all). This field only needs to carry the DELTA: the keys
+    # THIS object has explicitly diverged from Global on, which native
+    # OrcaSlicer's per-object model-settings metadata then overrides on
+    # top of the plate-wide config for just this one object (see
+    # threemf_io.py's ProjectObject.config_overrides doc comment for
+    # exactly how job_manager.py embeds this into the plate snapshot
+    # 3mf's Metadata/model_settings.config). Values are the native
+    # CLI's own string-serialized form (e.g. "1"/"0" for booleans — see
+    # ProjectObject.config_overrides's doc comment for why, confirmed
+    # against ConfigOptionBool::deserialize in the native source).
+    # Empty dict means this instance has no overrides of its own and
+    # fully inherits Global.
+    config_overrides: dict[str, str] = Field(default_factory=dict)
+
+
 class JobRequestModel(BaseModel):
     """
     Job request model with strict Pydantic v2 validation.
@@ -95,6 +146,17 @@ class JobRequestModel(BaseModel):
     
     # Files (at least one required)
     file_ids: list[str] = Field(min_length=1, description="One or more uploaded file IDs (UUIDs)")
+
+    # Live per-object placement (position/rotation/scale) from the
+    # Three.js viewport at submit time. When present, job_manager.py
+    # builds a single positioned .3mf from these + file_ids and passes
+    # THAT to the CLI instead of the raw file_ids directly — see
+    # job_manager.py's submit() for why this is necessary (raw,
+    # unpositioned STL files reliably fail multi-object slices with
+    # CLI_OBJECTS_PARTLY_INSIDE since they'd all sit at/near their own
+    # mesh-native origin, overlapping and/or exceeding the bed, now that
+    # arrange no longer runs by default at slice time).
+    instances: Optional[list[JobInstancePlacementModel]] = None
     
     # Profiles (all required)
     # Native OrcaSlicer profile filenames commonly include '@' (e.g.
@@ -270,6 +332,24 @@ async def submit_job(
                 status_code=status.HTTP_422_UNPROCESSABLE_ENTITY,
                 detail=f"Unknown parameter key: '{param_key}'. Not in parameter allowlist.",
             )
+
+    # Also validate every per-object override key (see
+    # JobInstancePlacementModel.config_overrides's doc comment) against
+    # the same allowlist — these get embedded directly as
+    # Metadata/model_settings.config <metadata key=.../> entries in the
+    # plate snapshot 3mf, so an unvalidated key here would let arbitrary
+    # attacker-controlled data reach the CLI's own config deserializer.
+    if job_request.instances:
+        for instance in job_request.instances:
+            for param_key in instance.config_overrides.keys():
+                if param_key not in param_allowlist:
+                    raise HTTPException(
+                        status_code=status.HTTP_422_UNPROCESSABLE_ENTITY,
+                        detail=(
+                            f"Unknown parameter key: '{param_key}' in instance "
+                            f"'{instance.instance_id}' config_overrides. Not in parameter allowlist."
+                        ),
+                    )
     
     # Step 2: Resolve all file IDs from database and verify they exist
     file_validation_errors = []

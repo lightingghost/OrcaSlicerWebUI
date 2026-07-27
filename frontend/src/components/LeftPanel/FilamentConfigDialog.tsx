@@ -14,6 +14,7 @@
 import React, { useEffect, useRef, useState, useCallback } from 'react';
 import { X, Save, ChevronDown, RotateCcw } from 'lucide-react';
 import { apiClient } from '../../api/client';
+import { useStore } from '../../store';
 
 // ---------------------------------------------------------------------------
 // Schema types (shared with printer dialog)
@@ -405,10 +406,17 @@ export const FilamentConfigDialog: React.FC<FilamentConfigDialogProps> = ({
       setInheritsValue(effectiveInherits);
 
       // ── 2. Try loading prior autosave — overlay on base ────────────────
+      // Only apply it if it belongs to the profile we're currently editing
+      // (marked via `_profile_path`); otherwise it's a stale autosave left
+      // over from a previous filament that occupied this slot.
       try {
         const autosaved = await apiClient.getAutosave(autosaveName);
-        // autosaved contains only the diff + inherits; overlay on base
-        setConfig({ ...base, ...autosaved });
+        const savedFor = autosaved['_profile_path'] as string | undefined;
+        if (!savedFor || savedFor === profilePath) {
+          setConfig({ ...base, ...autosaved });
+        } else {
+          setConfig({ ...base });
+        }
       } catch {
         // No autosave yet — start fresh from base
         setConfig({ ...base });
@@ -421,9 +429,14 @@ export const FilamentConfigDialog: React.FC<FilamentConfigDialogProps> = ({
 
   }, [isOpen, profilePath, schema, filamentIndex]);
 
+  // `inherits` and `_profile_path` are bookkeeping metadata added to the
+  // autosave payload (see buildSavePayload) — they never exist on baseConfig,
+  // so they must be excluded here or every reload of a prior autosave would
+  // show 2 phantom "changes" even with no real edits.
   const changedKeys = useCallback((): Set<string> => {
     const s = new Set<string>();
     for (const k of Object.keys(config)) {
+      if (k === 'inherits' || k === '_profile_path') continue;
       if (!valuesEqual(config[k], baseConfig[k])) s.add(k);
     }
     return s;
@@ -433,26 +446,27 @@ export const FilamentConfigDialog: React.FC<FilamentConfigDialogProps> = ({
     const changed = changedKeys();
     const payload: Record<string,unknown> = {};
     if (inheritsValue) payload['inherits'] = inheritsValue;
-    if (changed.size === 0) {
-      Object.assign(payload, config);
-    } else {
-      for (const k of changed) payload[k] = config[k];
-    }
+    if (profilePath) payload['_profile_path'] = profilePath;
+    for (const k of changed) payload[k] = config[k];
     return payload;
-  }, [config, changedKeys, inheritsValue]);
+  }, [config, changedKeys, inheritsValue, profilePath]);
 
-  // Debounced autosave — saves only the diff to fixed name filament_N
+  // Debounced autosave — saves only the diff to fixed name filament_N.
+  // Skip entirely when there are no real field changes, so opening the
+  // dialog and closing it without editing anything never writes an
+  // autosave (which would otherwise reappear as phantom changes on reopen).
   useEffect(() => {
     if (isFirstLoad.current || !isOpen || !profilePath) return;
     const autosaveName = `filament_${filamentIndex + 1}`;
     if (autosaveTimer.current) clearTimeout(autosaveTimer.current);
     autosaveTimer.current = setTimeout(() => {
+      if (changedKeys().size === 0) return;
       const payload = buildSavePayload();
       apiClient.saveAutosave(autosaveName, payload)
         .catch(err => console.error('Filament autosave failed:', err));
     }, 800);
     return () => { if (autosaveTimer.current) clearTimeout(autosaveTimer.current); };
-  }, [config, isOpen, profilePath, filamentIndex, buildSavePayload]);
+  }, [config, isOpen, profilePath, filamentIndex, buildSavePayload, changedKeys]);
 
   const handleChange = useCallback((key: string, value: unknown) => {
     setConfig(prev => ({ ...prev, [key]: value }));
@@ -479,6 +493,27 @@ export const FilamentConfigDialog: React.FC<FilamentConfigDialogProps> = ({
     }
   };
 
+  // Flush pending edits to the autosave immediately on close (bypassing
+  // the 800ms debounce) so a quick edit-then-close never loses the last
+  // keystroke, and re-save the session's user_config.yaml so the
+  // autosave is embedded there too (see profileSlice.saveUserConfig) —
+  // this is what lets Slice discover the edits without an explicit Save.
+  const saveUserConfig = useStore((state) => state.saveUserConfig);
+  const handleClose = useCallback(() => {
+    if (autosaveTimer.current) {
+      clearTimeout(autosaveTimer.current);
+      autosaveTimer.current = null;
+    }
+    if (!isFirstLoad.current && profilePath && changedKeys().size > 0) {
+      const autosaveName = `filament_${filamentIndex + 1}`;
+      const payload = buildSavePayload();
+      apiClient.saveAutosave(autosaveName, payload)
+        .then(() => saveUserConfig())
+        .catch(err => console.error('Filament autosave-on-close failed:', err));
+    }
+    onClose();
+  }, [profilePath, filamentIndex, changedKeys, buildSavePayload, saveUserConfig, onClose]);
+
   if (!isOpen) return null;
 
   const activeTab   = schema?.tabs.find(t => t.id === activeTabId) ?? null;
@@ -491,7 +526,7 @@ export const FilamentConfigDialog: React.FC<FilamentConfigDialogProps> = ({
   return (
     <>
     <div className="fixed inset-0 bg-black/60 flex items-center justify-center z-[9999]"
-      onClick={e => { if (e.target === e.currentTarget) onClose(); }}>
+      onClick={e => { if (e.target === e.currentTarget) handleClose(); }}>
       <div className="bg-gray-800 rounded-lg shadow-2xl flex flex-col w-[820px] max-w-[95vw] max-h-[90vh]">
 
         {/* Header */}
@@ -511,7 +546,7 @@ export const FilamentConfigDialog: React.FC<FilamentConfigDialogProps> = ({
               <Save className="w-4 h-4" />
               {saveStatus === 'saving' ? 'Saving…' : saveStatus === 'saved' ? 'Saved ✓' : saveStatus === 'error' ? 'Error!' : 'Save…'}
             </button>
-            <button onClick={onClose} className="text-gray-400 hover:text-white p-1 rounded">
+            <button onClick={handleClose} className="text-gray-400 hover:text-white p-1 rounded">
               <X className="w-5 h-5" />
             </button>
           </div>

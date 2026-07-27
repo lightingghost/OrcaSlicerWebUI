@@ -638,7 +638,7 @@ def main():
     if args.out:
         out_path = Path(args.out).resolve()
     else:
-        out_path = repo_root / "frontend" / "public" / "data" / "printer_config_dialog_options.json"
+        out_path = repo_root / "data" / "printer_config_dialog_options.json"
 
     out_path.parent.mkdir(parents=True, exist_ok=True)
 

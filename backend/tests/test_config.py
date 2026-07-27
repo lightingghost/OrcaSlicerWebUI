@@ -138,15 +138,22 @@ class TestDerivedProperties:
     """Test that derived properties compute correct paths."""
 
     def test_profiles_root(self, monkeypatch):
-        """profiles_root should be derived from CLI path."""
+        """
+        profiles_root should be derived from CLI path.
+
+        The CLI binary lives at <squashfs-root>/bin/orca-slicer (the
+        AppImage extraction layout used in production — see Dockerfile /
+        run-local.sh), so profiles_root walks up two levels from the
+        binary (bin/ -> squashfs-root/) then into resources/profiles.
+        """
         monkeypatch.setenv(
-            "ORCA_CLI_PATH", "/app/orca-slicer/build/linux/OrcaSlicer_ubu64"
+            "ORCA_CLI_PATH", "/app/squashfs-root/bin/orca-slicer"
         )
         monkeypatch.setenv("API_SECRET", "test_secret")
 
         settings = Settings()
 
-        expected = Path("/app/orca-slicer/resources/profiles")
+        expected = Path("/app/squashfs-root/resources/profiles")
         assert settings.profiles_root == expected
 
     def test_session_uploads_dir(self, monkeypatch):

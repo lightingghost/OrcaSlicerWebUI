@@ -12,6 +12,7 @@ import { ArrangeSettingsSlice, createArrangeSettingsSlice } from './arrangeSetti
 import { ContextMenuSlice, createContextMenuSlice } from './contextMenuSlice';
 import { PreviewSlice, createPreviewSlice } from './previewSlice';
 import { DeviceSlice, createDeviceSlice } from './deviceSlice';
+import { ProjectSlice, createProjectSlice } from './projectSlice';
 
 export type StoreState = FileSlice &
   ProfileSlice &
@@ -25,7 +26,8 @@ export type StoreState = FileSlice &
   ArrangeSettingsSlice &
   ContextMenuSlice &
   PreviewSlice &
-  DeviceSlice;
+  DeviceSlice &
+  ProjectSlice;
 
 export const useStore = create<StoreState>()((...a) => ({
   ...createFileSlice(...a),
@@ -41,6 +43,7 @@ export const useStore = create<StoreState>()((...a) => ({
   ...createContextMenuSlice(...a),
   ...createPreviewSlice(...a),
   ...createDeviceSlice(...a),
+  ...createProjectSlice(...a),
 }));
 
 // Export individual slice types and interfaces for convenience
@@ -74,4 +77,10 @@ export { DEFAULT_ARRANGE_SETTINGS } from './arrangeSettingsSlice';
 export type { ContextMenuSlice, ContextMenuState } from './contextMenuSlice';
 export type { PreviewSlice, MainTab } from './previewSlice';
 export type { DeviceSlice, DeviceConnection, HostType, PrinterAgent, UploadJobResult } from './deviceSlice';
+export type {
+  ProjectSlice,
+  PlateObjectPlacement,
+  ImportedProjectObject,
+  ProjectExportObject,
+} from './projectSlice';
 export { validateParameter } from '../lib/validation';

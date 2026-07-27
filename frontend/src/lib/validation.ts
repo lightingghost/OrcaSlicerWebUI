@@ -80,3 +80,29 @@ export function validateParameter(
       return `Unknown parameter type: ${(descriptor as any).type}`;
   }
 }
+
+/**
+ * Converts a parameter override value into the exact string form native
+ * OrcaSlicer's own config deserializer expects (ConfigOptionBool /
+ * ConfigOptionFloat / etc.'s `deserialize`, confirmed against
+ * libslic3r/Config.hpp). Booleans MUST serialize as "1"/"0" — NOT
+ * "true"/"false", which ConfigOptionBool::deserialize does not
+ * recognize and would silently fail to apply (returns false without
+ * throwing, leaving the option at its prior default).
+ *
+ * Used when building per-object config_overrides for a job's `instances`
+ * (see JobInstancePlacement.config_overrides's doc comment) — those
+ * values get embedded directly into the plate snapshot 3mf's
+ * Metadata/model_settings.config and read back by the CLI's own
+ * `config.set_deserialize`, so they must already be in the CLI's native
+ * string form (unlike the top-level `parameter_overrides`, which the
+ * backend's cli_builder.py passes as `--flag=value` CLI arguments, where
+ * a plain JS-toString'd boolean/number already happens to work for the
+ * CLI's own command-line parser).
+ */
+export function serializeParameterValueForCli(value: string | number | boolean): string {
+  if (typeof value === 'boolean') {
+    return value ? '1' : '0';
+  }
+  return String(value);
+}

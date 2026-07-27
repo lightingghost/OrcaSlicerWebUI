@@ -39,6 +39,49 @@ export interface ViewportSlice {
    */
   captureViewportThumbnail: (() => Promise<Blob | null>) | null;
   setCaptureViewportThumbnail: (fn: (() => Promise<Blob | null>) | null) => void;
+
+  /**
+   * Registered by ThreeViewport once its scene is ready. Returns every
+   * plate object's CURRENT live position + orientation (bed-absolute mm,
+   * THREE.js quaternion order) read directly from the Three.js scene's
+   * mesh transforms, keyed by file_id — the source of truth for object
+   * placement, since it's never mirrored into Zustand (see MainArea.tsx's
+   * doc comment on why). Used by projectSlice's downloadProject to build
+   * an accurate project.3mf reflecting exactly what's on the plate right
+   * now, including any manual drag/rotate edits.
+   */
+  getPlateSnapshot:
+    | (() => Array<{
+        file_id: string;
+        x: number;
+        y: number;
+        z: number;
+        qx: number;
+        qy: number;
+        qz: number;
+        qw: number;
+        sx: number;
+        sy: number;
+        sz: number;
+      }>)
+    | null;
+  setGetPlateSnapshot: (
+    fn:
+      | (() => Array<{
+          file_id: string;
+          x: number;
+          y: number;
+          z: number;
+          qx: number;
+          qy: number;
+          qz: number;
+          qw: number;
+          sx: number;
+          sy: number;
+          sz: number;
+        }>)
+      | null
+  ) => void;
 }
 
 export const createViewportSlice: StateCreator<ViewportSlice> = (set) => ({
@@ -48,6 +91,7 @@ export const createViewportSlice: StateCreator<ViewportSlice> = (set) => ({
   selectedObjectId: null,
   isInfoOverlayOpen: true,
   captureViewportThumbnail: null,
+  getPlateSnapshot: null,
 
   setModelBounds: (bounds: BoundingBox) => {
     set({ modelBounds: bounds });
@@ -72,5 +116,9 @@ export const createViewportSlice: StateCreator<ViewportSlice> = (set) => ({
 
   setCaptureViewportThumbnail: (fn) => {
     set({ captureViewportThumbnail: fn });
+  },
+
+  setGetPlateSnapshot: (fn) => {
+    set({ getPlateSnapshot: fn });
   },
 });

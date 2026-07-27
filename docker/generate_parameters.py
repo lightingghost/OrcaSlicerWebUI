@@ -1,9 +1,8 @@
 #!/usr/bin/env python3
 """
 Invoked during the `json-gen` Docker build stage to produce
-backend/app/data/parameters.json from a freshly checked-out OrcaSlicer
-source tree, using the project's own ParameterParser class (see
-backend/app/parameter_parser.py) rather than duplicating its logic.
+data/parameters.json from a freshly checked-out OrcaSlicer source tree,
+using the project's own ParameterParser class (scripts/parameter_parser.py).
 
 Usage:
     python3 generate_parameters.py <orca-root> <output-json-path>
@@ -11,6 +10,8 @@ Usage:
 import sys
 from pathlib import Path
 
+# In the Docker json-gen stage all scripts are copied to /gen/, so
+# parameter_parser.py is a sibling of this file.
 sys.path.insert(0, str(Path(__file__).parent))
 from parameter_parser import ParameterParser  # noqa: E402
 

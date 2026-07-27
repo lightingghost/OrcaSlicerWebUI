@@ -365,7 +365,7 @@ def main():
             sys.exit(f"ERROR: {p} not found")
 
     out_path = Path(args.out).resolve() if args.out else \
-        repo_root / "frontend" / "public" / "data" / "filament_config_dialog_options.json"
+        repo_root / "data" / "filament_config_dialog_options.json"
     out_path.parent.mkdir(parents=True, exist_ok=True)
 
     print("Parsing PrintConfig.cpp …")

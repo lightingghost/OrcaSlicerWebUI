@@ -1,4 +1,6 @@
 import { StateCreator } from 'zustand';
+import { ParameterSlice } from './parameterSlice';
+import { apiClient } from '../api/client';
 
 export interface UploadedFile {
   file_id: string;
@@ -46,7 +48,12 @@ function generateCloneId(sourceFileId: string): string {
   return `${sourceFileId}__clone-${cloneIdCounter}-${Date.now()}`;
 }
 
-export const createFileSlice: StateCreator<FileSlice> = (set, get) => ({
+export const createFileSlice: StateCreator<
+  FileSlice & ParameterSlice,
+  [],
+  [],
+  FileSlice
+> = (set, get) => ({
   uploadedFiles: [],
   uploadError: null,
 
@@ -95,6 +102,14 @@ export const createFileSlice: StateCreator<FileSlice> = (set, get) => ({
     set({ uploadedFiles: remaining });
 
     if (!target) return;
+
+    // Discard this object's own process-config overrides (in-memory) and
+    // its autosave on disk — otherwise a stale objectOverrides entry (and
+    // process_config_object_{file_id}.json) would linger forever for a
+    // file_id that no longer exists on the plate, and could even be
+    // wrongly resurrected if a future upload happened to reuse the id.
+    get().clearAllObjectOverrides(fileId);
+    apiClient.deleteAutosave(`process_config_object_${fileId}`).catch(() => {});
 
     // Only ask the backend to delete the underlying file once NO instance
     // (original or clone) referencing that source file remains — deleting

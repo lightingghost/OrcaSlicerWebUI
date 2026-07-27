@@ -475,13 +475,12 @@ class ParameterParser:
 def main():
     """Main entry point for the parameter parser"""
 
-    # Paths relative to the backend directory
+    # script lives in scripts/; repo root is one level up
     script_dir = Path(__file__).parent
-    backend_dir = script_dir.parent
-    workspace_root = backend_dir.parent.parent
+    repo_root = script_dir.parent
 
-    cpp_file = workspace_root / "OrcaSlicer" / "src" / "libslic3r" / "PrintConfig.cpp"
-    output_file = script_dir / "data" / "parameters.json"
+    cpp_file = repo_root.parent / "OrcaSlicer" / "src" / "libslic3r" / "PrintConfig.cpp"
+    output_file = repo_root / "data" / "parameters.json"
 
     print(f"Parsing PrintConfig.cpp from: {cpp_file}")
     print(f"Output will be written to: {output_file}")

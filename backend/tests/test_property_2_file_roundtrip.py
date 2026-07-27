@@ -11,14 +11,15 @@ file shall exist on disk at the recorded storage_path.
 
 **Validates: Requirements 1.2, 1.4**
 
-IMPORTANT: This property test is comprehensive but uses a function-scoped fixture
-that reinitializes the FastAPI app for Hypothesis property testing. The app loads
-751 parameters from parameters.json on each initialization. Due to this overhead:
-
-- The test runs with max_examples=100 by default (standard for property tests)
-- Each example takes ~1-2 seconds due to app initialization
-- Total test time: ~2-3 minutes for full run
-- The logic is also thoroughly tested by test_files_integration.py
+The FastAPI app's real lifespan (auth/db init) now runs exactly once per
+test invocation via `with TestClient(app) as client:` in the fixture below
+(Hypothesis reuses that single fixture instance across every generated
+example — see the `suppress_health_check` below), not once per example, so
+this test only pays app-startup cost a single time. max_examples is kept
+deliberately small (20) and file content deliberately tiny (≤2 KB) so a
+unit test run stays well under a second or two even on slower machines —
+this is a fast smoke-level property check, not an exhaustive fuzz run;
+test_files_integration.py covers the same logic with concrete cases.
 
 To run this test specifically:
     pytest tests/test_property_2_file_roundtrip.py -v
@@ -38,8 +39,9 @@ valid_extensions = st.sampled_from(["stl", "3mf", "obj", "amf"])
 
 
 # Strategy for generating valid file content
-# For testing, we generate small files up to 50 KB to keep tests fast
-valid_file_content = st.binary(min_size=10, max_size=50 * 1024)
+# Kept tiny (up to 2 KB) purely for test speed — this property doesn't
+# depend on file size, so there's no coverage benefit to larger content.
+valid_file_content = st.binary(min_size=10, max_size=2 * 1024)
 
 
 # Strategy for generating valid filenames
@@ -77,16 +79,27 @@ def test_client_workspace(tmp_path):
     os.environ["ORCA_CLI_PATH"] = "/tmp/fake_cli_prop2"
     
     try:
-        # Ensure clean import
-        for module in ['app.main', 'app.config', 'app.database']:
-            if module in sys.modules:
+        # Ensure clean import of every app.* module — not just
+        # app.main/app.config/app.database. Every router module does its
+        # own `from app.config import settings` at import time, binding
+        # its own reference to whatever Settings() instance existed at
+        # THAT import; clearing only app.config's cache leaves those
+        # routers holding a stale settings object built from a different
+        # test file's env vars if this test runs after them in the suite.
+        for module in list(sys.modules):
+            if module == 'app' or module.startswith('app.'):
                 del sys.modules[module]
         
         from app.main import app
         
-        client = TestClient(app)
-        
-        yield (client, workspace)
+        # `with TestClient(app) as client:` runs the app's lifespan on
+        # entry (init_auth/init_db/etc — see app/main.py's `lifespan`),
+        # which a bare `TestClient(app)` does NOT do; without it every
+        # authenticated request fails with "Authentication not
+        # initialized" since `verify_token` depends on `init_auth`
+        # having run.
+        with TestClient(app) as client:
+            yield (client, workspace)
     finally:
         # Cleanup environment variables
         for key in ["WORKSPACE_ROOT", "API_SECRET", "ORCA_CLI_PATH"]:
@@ -96,8 +109,9 @@ def test_client_workspace(tmp_path):
 
 # Feature: orca-slicer-web-ui, Property 2: Uploaded file is stored and retrievable by ID
 @settings(
-    max_examples=100,  # Standard for property tests - provides comprehensive coverage
-    deadline=None,  # No deadline as app initialization can take 1-2 seconds per example
+    max_examples=20,  # Kept small: this is a unit-test-speed smoke check,
+                      # not an exhaustive fuzz run (see module docstring).
+    deadline=None,
     suppress_health_check=[HealthCheck.function_scoped_fixture],  # Fixture is safe for reuse by Hypothesis
 )
 @given(

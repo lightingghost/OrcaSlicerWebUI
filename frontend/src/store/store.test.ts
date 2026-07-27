@@ -48,9 +48,11 @@ describe('Zustand Store Slices', () => {
       rotate_x: 0,
       rotate_y: 0,
       scale: 1,
-      // Default is 2 (native's own "auto arrange" value), not 0 — see
+      // Default is 0 (disabled) — Arrange is a separate, explicit,
+      // real-CLI-backed action (see ViewportTransformToolbar's Arrange
+      // button), so Slice no longer silently re-arranges by default. See
       // transformSlice.ts's comment on why.
-      arrange: 2,
+      arrange: 0,
       orient: 0,
       repetitions: 1,
       // Default is true, not native CLI's own false — see
@@ -164,7 +166,11 @@ describe('Zustand Store Slices', () => {
         ],
       });
 
-      (global.fetch as any).mockResolvedValueOnce({ ok: true });
+      // removeFile now also fires a fire-and-forget autosave-cleanup
+      // request (deleting this object's process_config_object_{file_id}
+      // autosave) in addition to the backend file delete, so every fetch
+      // call needs a resolved response.
+      (global.fetch as any).mockResolvedValue({ ok: true, status: 200, json: async () => ({}) });
 
       useStore.getState().removeFile('file-1');
 
@@ -623,9 +629,11 @@ describe('Zustand Store Slices', () => {
       expect(state.transforms.rotate_x).toBe(0);
       expect(state.transforms.rotate_y).toBe(0);
       expect(state.transforms.scale).toBe(1);
-      // Default is 2 (native's own "auto arrange" value) — see
+      // Default is 0 (disabled) — Arrange is a separate, explicit,
+      // real-CLI-backed action (see ViewportTransformToolbar's Arrange
+      // button), so Slice no longer silently re-arranges by default. See
       // transformSlice.ts's comment on why.
-      expect(state.transforms.arrange).toBe(2);
+      expect(state.transforms.arrange).toBe(0);
       expect(state.transforms.orient).toBe(0);
       expect(state.transforms.repetitions).toBe(1);
       // ensure_on_bed defaults to true (not native CLI's own false default)
@@ -681,7 +689,7 @@ describe('Zustand Store Slices', () => {
       // Set various transforms to non-default values first.
       useStore.getState().setTransform('rotate', 90);
       useStore.getState().setTransform('scale', 1.5);
-      useStore.getState().setTransform('arrange', 0);
+      useStore.getState().setTransform('arrange', 2);
       useStore.getState().setTransform('ensure_on_bed', false);
 
       // Reset
@@ -690,9 +698,9 @@ describe('Zustand Store Slices', () => {
       const state = useStore.getState();
       expect(state.transforms.rotate).toBe(0);
       expect(state.transforms.scale).toBe(1);
-      // Defaults are arrange=2 (native's own "auto arrange" value) and
-      // ensure_on_bed=true — see transformSlice.ts's comment on why.
-      expect(state.transforms.arrange).toBe(2);
+      // Defaults are arrange=0 (disabled) and ensure_on_bed=true — see
+      // transformSlice.ts's comment on why.
+      expect(state.transforms.arrange).toBe(0);
       expect(state.transforms.ensure_on_bed).toBe(true);
     });
 
@@ -924,17 +932,28 @@ describe('Zustand Store Slices', () => {
       expect(useStore.getState().uploadedFiles).toHaveLength(1);
     });
 
-    it('removeFile only issues a backend delete once no sibling instance remains', () => {
+    it('removeFile only issues a backend file delete once no sibling instance remains', () => {
       const fetchSpy = global.fetch as any;
+      fetchSpy.mockResolvedValue({ ok: true, status: 200, json: async () => ({}) });
       useStore.getState().duplicateObject('orig-1'); // now 2 instances of orig-1
       fetchSpy.mockClear();
 
-      // Removing one of two instances should NOT trigger a backend delete
-      // (a sibling still needs the same source file).
+      // Removing one of two instances should NOT trigger a backend FILE
+      // delete (a sibling still needs the same source file) — it does
+      // still fire a per-object autosave-cleanup request for that
+      // instance's own file_id, since per-object process overrides are
+      // keyed per plate instance, not per source file.
       const files = useStore.getState().uploadedFiles;
       const cloneId = files.find((f) => f.is_clone)!.file_id;
       useStore.getState().removeFile(cloneId);
-      expect(fetchSpy).not.toHaveBeenCalled();
+      expect(fetchSpy).not.toHaveBeenCalledWith(
+        '/api/files/orig-1',
+        expect.objectContaining({ method: 'DELETE' })
+      );
+      expect(fetchSpy).toHaveBeenCalledWith(
+        `/api/autosave/process_config_object_${cloneId}`,
+        expect.objectContaining({ method: 'DELETE' })
+      );
       expect(useStore.getState().uploadedFiles).toHaveLength(1);
 
       // Removing the last remaining instance SHOULD trigger a backend delete.

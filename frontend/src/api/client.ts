@@ -49,6 +49,21 @@ export interface UserConfig {
   selected_bed_type?: string | null;
   selected_process_profile_path?: string | null;
   selected_filament_profile_paths?: string[];
+  /** Pending (unsaved) edits from the Printer settings dialog, mirroring
+   *  USER_WORKSPACE/autosave/printer_config.json. Null if no pending edits. */
+  printer_config_autosave?: Record<string, unknown> | null;
+  /** Pending (unsaved) edits from the Process parameter panel, mirroring
+   *  USER_WORKSPACE/autosave/process_config.json. Null if no pending edits. */
+  process_config_autosave?: Record<string, unknown> | null;
+  /** Pending (unsaved) edits from each Filament settings dialog, parallel
+   *  to selected_filament_profile_paths. Null entries mean no pending
+   *  edits for that filament slot. */
+  filament_config_autosaves?: (Record<string, unknown> | null)[];
+  /** Per-object process (print) config overrides, keyed by the plate
+   *  object's file_id, mirroring
+   *  USER_WORKSPACE/autosave/process_config_object_{file_id}.json. See
+   *  parameterSlice.ts's objectOverrides for the in-memory equivalent. */
+  object_config_autosaves?: Record<string, Record<string, unknown> | null>;
 }
 
 export interface ParameterDescriptor {
@@ -154,6 +169,44 @@ export interface HealthResponse {
   status: string;
   cli_available: boolean;
   workspace_accessible: boolean;
+}
+
+// ============================================================================
+// Arrange (real CLI-backed placement — see backend/app/routers/arrange.py)
+// ============================================================================
+
+export interface ArrangePlateInstance {
+  /** Opaque per-plate-object id — the frontend's own UploadedFile.file_id
+   *  (which is unique per plate entry even for clones), NOT necessarily a
+   *  real uploaded file. */
+  instance_id: string;
+  /** The real uploaded file backing this instance's geometry — for
+   *  clones this is UploadedFile.source_file_id, shared by every clone
+   *  of the same source. */
+  file_id: string;
+}
+
+export interface ArrangeRequest {
+  instances: ArrangePlateInstance[];
+  printer_profile_path: string;
+  process_profile_path: string;
+  spacing_mm: number;
+  enable_rotation: boolean;
+  align_to_y_axis: boolean;
+}
+
+export interface ArrangedInstance {
+  instance_id: string;
+  /** Bed-absolute mm, matching the printer's `printable_area` coordinate
+   *  space (see profileSlice's `bedCenter` for how to convert this into
+   *  the Three.js scene's origin-centered coordinates). */
+  x: number;
+  y: number;
+  rotation_z_deg: number;
+}
+
+export interface ArrangeResponse {
+  instances: ArrangedInstance[];
 }
 
 // ============================================================================
@@ -617,6 +670,24 @@ class ApiClient {
   async deleteAutosave(name: string): Promise<{ message: string }> {
     return this.request<{ message: string }>(`/api/autosave/${encodeURIComponent(name)}`, {
       method: "DELETE",
+    });
+  }
+
+  // ============================================================================
+  // Arrange Endpoint
+  // ============================================================================
+
+  /**
+   * Compute native-accurate object placement by invoking the real
+   * OrcaSlicer CLI's own arrange algorithm (see
+   * backend/app/routers/arrange.py) — NOT an approximation. Used by
+   * ThreeViewport's Arrange button so Prepare-tab positions always match
+   * what Slice will actually produce.
+   */
+  async arrangeObjects(request: ArrangeRequest): Promise<ArrangeResponse> {
+    return this.request<ArrangeResponse>("/api/arrange", {
+      method: "POST",
+      body: JSON.stringify(request),
     });
   }
 

@@ -1,6 +1,7 @@
 import React, { useMemo, useState } from 'react';
 import { useStore } from '../../store';
 import type { JobRequest } from '../../store';
+import { serializeParameterValueForCli } from '../../lib/validation';
 
 /**
  * SubmitButton Component
@@ -36,6 +37,12 @@ export const SubmitButton: React.FC = () => {
   // Parameter slice
   const parameterOverrides = useStore((state) => state.overrides);
   const validationErrors = useStore((state) => state.validationErrors);
+  // Per-object process overrides (Global/Objects toggle — see
+  // ProcessSelector.tsx / ParameterField.tsx) — each object's own DELTA
+  // from Global, embedded per-instance below (see
+  // JobInstancePlacement.config_overrides's doc comment for why no
+  // merge with Global is needed here).
+  const objectOverrides = useStore((state) => state.objectOverrides);
 
   // Misc slice
   const misc = useStore((state) => state.misc);
@@ -52,6 +59,11 @@ export const SubmitButton: React.FC = () => {
 
   // Job slice
   const submitJob = useStore((state) => state.submitJob);
+
+  // Viewport slice — see JobRequest.instances's doc comment for why this
+  // is needed: without it, the CLI never learns each object's live
+  // position/rotation and slices raw, unpositioned files instead.
+  const getPlateSnapshot = useStore((state) => state.getPlateSnapshot);
 
   // Compute disabled state
   const isDisabled = useMemo(() => {
@@ -116,6 +128,45 @@ export const SubmitButton: React.FC = () => {
       action,
       parameter_overrides: parameterOverrides,
     };
+
+    // Capture each plate object's LIVE position/rotation/scale from the
+    // Three.js scene (getPlateSnapshot, registered by ThreeViewport — the
+    // same mechanism Download Project and Arrange already rely on) so
+    // the CLI slices/exports the plate exactly as shown in the viewport,
+    // not the raw uploaded files sitting at their own mesh-native origin.
+    // Without this, submitting 2+ objects reliably fails with
+    // CLI_OBJECTS_PARTLY_INSIDE (they'd overlap/exceed the bed, since
+    // arrange is disabled by default — see transformSlice.ts) even
+    // though the viewport shows them correctly placed.
+    if (getPlateSnapshot) {
+      const snapshot = getPlateSnapshot();
+      const snapshotByFileId = new Map(snapshot.map((s) => [s.file_id, s]));
+      request.instances = uploadedFiles
+        .map((file) => {
+          const placement = snapshotByFileId.get(file.file_id);
+          if (!placement) return null;
+          // This object's own override DELTA (not merged with Global —
+          // see JobInstancePlacement.config_overrides's doc comment),
+          // serialized to the native CLI's own string form.
+          const ownOverrides = objectOverrides[file.file_id];
+          const config_overrides =
+            ownOverrides && Object.keys(ownOverrides).length > 0
+              ? Object.fromEntries(
+                  Object.entries(ownOverrides).map(([key, value]) => [
+                    key,
+                    serializeParameterValueForCli(value),
+                  ])
+                )
+              : undefined;
+          return {
+            ...placement,
+            instance_id: file.file_id,
+            file_id: file.source_file_id,
+            ...(config_overrides ? { config_overrides } : {}),
+          };
+        })
+        .filter((v): v is NonNullable<typeof v> => v !== null);
+    }
 
     // Add plate_number for slice action
     if (action === 'slice') {

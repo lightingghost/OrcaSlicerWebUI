@@ -8,3 +8,4 @@ export { ParameterTabs } from './ParameterTabs';
 export { ParameterPanel } from './ParameterPanel';
 export { ParameterField } from './ParameterField';
 export { ProcessSelector } from './ProcessSelector';
+export { ProcessObjectsList } from './ProcessObjectsList';

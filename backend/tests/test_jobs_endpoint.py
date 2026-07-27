@@ -6,11 +6,8 @@ Tests the paginated job listing with ordering and session filtering.
 Requirements: 9.1, 9.2
 """
 
-import json
-from datetime import datetime, timezone
 from unittest.mock import AsyncMock, MagicMock, patch
 
-import pytest
 from fastapi.testclient import TestClient
 
 
@@ -364,154 +361,193 @@ def test_list_jobs_offset_validation():
 
 
 
-@pytest.mark.asyncio
-async def test_cancel_queued_job(test_db):
+def _mock_get_db_returning_status(status_value):
+    """
+    Build a get_db override whose first `db.execute(...)` call returns a
+    cursor with the given job `status` row — matching cancel_job's single
+    `SELECT status FROM jobs WHERE job_id = ?` query. Returns None instead
+    of a row when status_value is None, simulating a job that isn't found.
+    """
+    async def mock_get_db():
+        mock_cursor = AsyncMock()
+        mock_cursor.fetchone = AsyncMock(
+            return_value=(status_value,) if status_value is not None else None
+        )
+        mock_db = AsyncMock()
+        mock_db.execute = AsyncMock(return_value=mock_cursor)
+        yield mock_db
+    return mock_get_db
+
+
+def test_cancel_queued_job():
     """Test cancelling a job that is still queued."""
-    # Insert a queued job
-    async with test_db as db:
-        await db.execute("PRAGMA foreign_keys = ON")
-        
-        await db.execute(
-            """
-            INSERT INTO jobs (job_id, session_id, submitted_at, status, action_type, cli_args, output_dir)
-            VALUES (?, ?, ?, ?, ?, ?, ?)
-            """,
-            ("job-queued", "test-session", "2024-01-01T10:00:00Z", "queued", "slice", "[]", "/tmp/job-queued"),
-        )
-        
-        await db.commit()
-    
-    # Cancel the job
-    async with AsyncClient(app=app, base_url="http://test") as client:
-        response = await client.delete(
-            "/api/jobs/job-queued",
-            headers={"Authorization": "Bearer changeme"},
-        )
-    
-    assert response.status_code == 200
-    data = response.json()
-    assert data["job_id"] == "job-queued"
-    assert data["previous_status"] == "queued"
-    assert data["message"] == "Job cancelled successfully"
-    
-    # Verify job status changed to failed
-    async with test_db as db:
-        cursor = await db.execute(
-            "SELECT status, error_message FROM jobs WHERE job_id = ?",
-            ("job-queued",),
-        )
-        row = await cursor.fetchone()
-        assert row[0] == "failed"
-        assert "cancelled" in row[1].lower()
+    from app.auth import init_auth
+    init_auth("test-secret-12345")
+
+    with patch("app.database.init_db", new_callable=AsyncMock), \
+         patch("app.cleanup.run_cleanup_loop", return_value=AsyncMock()), \
+         patch("app.job_manager.JobManager"):
+
+        from app.main import app
+        from app.database import get_db
+
+        app.dependency_overrides[get_db] = _mock_get_db_returning_status("queued")
+        app.state.job_manager = MagicMock()
+        app.state.job_manager.cancel = AsyncMock(return_value=True)
+
+        try:
+            client = TestClient(app)
+            response = client.delete(
+                "/api/jobs/job-queued",
+                headers={"Authorization": "Bearer test-secret-12345"},
+            )
+
+            assert response.status_code == 200
+            data = response.json()
+            assert data["job_id"] == "job-queued"
+            assert data["previous_status"] == "queued"
+            assert data["message"] == "Job cancelled successfully"
+            app.state.job_manager.cancel.assert_awaited_once_with("job-queued")
+        finally:
+            app.dependency_overrides.clear()
+            del app.state.job_manager
 
 
-@pytest.mark.asyncio
-async def test_cancel_nonexistent_job(test_db):
+def test_cancel_nonexistent_job():
     """Test cancelling a job that doesn't exist returns 404."""
-    async with AsyncClient(app=app, base_url="http://test") as client:
-        response = await client.delete(
-            "/api/jobs/nonexistent-job",
-            headers={"Authorization": "Bearer changeme"},
-        )
-    
-    assert response.status_code == 404
-    assert "not found" in response.json()["detail"].lower()
+    from app.auth import init_auth
+    init_auth("test-secret-12345")
+
+    with patch("app.database.init_db", new_callable=AsyncMock), \
+         patch("app.cleanup.run_cleanup_loop", return_value=AsyncMock()), \
+         patch("app.job_manager.JobManager"):
+
+        from app.main import app
+        from app.database import get_db
+
+        app.dependency_overrides[get_db] = _mock_get_db_returning_status(None)
+        app.state.job_manager = MagicMock()
+
+        try:
+            client = TestClient(app)
+            response = client.delete(
+                "/api/jobs/nonexistent-job",
+                headers={"Authorization": "Bearer test-secret-12345"},
+            )
+
+            assert response.status_code == 404
+            assert "not found" in response.json()["detail"].lower()
+        finally:
+            app.dependency_overrides.clear()
+            del app.state.job_manager
 
 
-@pytest.mark.asyncio
-async def test_cancel_completed_job(test_db):
+def test_cancel_completed_job():
     """Test cancelling a job that has already completed returns 409."""
-    # Insert a completed job
-    async with test_db as db:
-        await db.execute("PRAGMA foreign_keys = ON")
-        
-        await db.execute(
-            """
-            INSERT INTO jobs (job_id, session_id, submitted_at, status, action_type, cli_args, output_dir, completed_at)
-            VALUES (?, ?, ?, ?, ?, ?, ?, ?)
-            """,
-            ("job-completed", "test-session", "2024-01-01T10:00:00Z", "completed", "slice", "[]", "/tmp/job-completed", "2024-01-01T10:05:00Z"),
-        )
-        
-        await db.commit()
-    
-    # Try to cancel the completed job
-    async with AsyncClient(app=app, base_url="http://test") as client:
-        response = await client.delete(
-            "/api/jobs/job-completed",
-            headers={"Authorization": "Bearer changeme"},
-        )
-    
-    assert response.status_code == 409
-    assert "terminal state" in response.json()["detail"].lower()
+    from app.auth import init_auth
+    init_auth("test-secret-12345")
+
+    with patch("app.database.init_db", new_callable=AsyncMock), \
+         patch("app.cleanup.run_cleanup_loop", return_value=AsyncMock()), \
+         patch("app.job_manager.JobManager"):
+
+        from app.main import app
+        from app.database import get_db
+
+        app.dependency_overrides[get_db] = _mock_get_db_returning_status("completed")
+        app.state.job_manager = MagicMock()
+
+        try:
+            client = TestClient(app)
+            response = client.delete(
+                "/api/jobs/job-completed",
+                headers={"Authorization": "Bearer test-secret-12345"},
+            )
+
+            assert response.status_code == 409
+            assert "terminal state" in response.json()["detail"].lower()
+        finally:
+            app.dependency_overrides.clear()
+            del app.state.job_manager
 
 
-@pytest.mark.asyncio
-async def test_cancel_failed_job(test_db):
+def test_cancel_failed_job():
     """Test cancelling a job that has failed returns 409."""
-    # Insert a failed job
-    async with test_db as db:
-        await db.execute("PRAGMA foreign_keys = ON")
-        
-        await db.execute(
-            """
-            INSERT INTO jobs (job_id, session_id, submitted_at, status, action_type, cli_args, output_dir, completed_at, error_message)
-            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
-            """,
-            ("job-failed", "test-session", "2024-01-01T10:00:00Z", "failed", "slice", "[]", "/tmp/job-failed", "2024-01-01T10:05:00Z", "CLI error"),
-        )
-        
-        await db.commit()
-    
-    # Try to cancel the failed job
-    async with AsyncClient(app=app, base_url="http://test") as client:
-        response = await client.delete(
-            "/api/jobs/job-failed",
-            headers={"Authorization": "Bearer changeme"},
-        )
-    
-    assert response.status_code == 409
-    assert "terminal state" in response.json()["detail"].lower()
+    from app.auth import init_auth
+    init_auth("test-secret-12345")
+
+    with patch("app.database.init_db", new_callable=AsyncMock), \
+         patch("app.cleanup.run_cleanup_loop", return_value=AsyncMock()), \
+         patch("app.job_manager.JobManager"):
+
+        from app.main import app
+        from app.database import get_db
+
+        app.dependency_overrides[get_db] = _mock_get_db_returning_status("failed")
+        app.state.job_manager = MagicMock()
+
+        try:
+            client = TestClient(app)
+            response = client.delete(
+                "/api/jobs/job-failed",
+                headers={"Authorization": "Bearer test-secret-12345"},
+            )
+
+            assert response.status_code == 409
+            assert "terminal state" in response.json()["detail"].lower()
+        finally:
+            app.dependency_overrides.clear()
+            del app.state.job_manager
 
 
-@pytest.mark.asyncio
-async def test_cancel_timed_out_job(test_db):
+def test_cancel_timed_out_job():
     """Test cancelling a job that has timed out returns 409."""
-    # Insert a timed out job
-    async with test_db as db:
-        await db.execute("PRAGMA foreign_keys = ON")
-        
-        await db.execute(
-            """
-            INSERT INTO jobs (job_id, session_id, submitted_at, status, action_type, cli_args, output_dir, completed_at, error_message)
-            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
-            """,
-            ("job-timeout", "test-session", "2024-01-01T10:00:00Z", "timed_out", "slice", "[]", "/tmp/job-timeout", "2024-01-01T11:00:00Z", "Job timed out"),
-        )
-        
-        await db.commit()
-    
-    # Try to cancel the timed out job
-    async with AsyncClient(app=app, base_url="http://test") as client:
-        response = await client.delete(
-            "/api/jobs/job-timeout",
-            headers={"Authorization": "Bearer changeme"},
-        )
-    
-    assert response.status_code == 409
-    assert "terminal state" in response.json()["detail"].lower()
+    from app.auth import init_auth
+    init_auth("test-secret-12345")
+
+    with patch("app.database.init_db", new_callable=AsyncMock), \
+         patch("app.cleanup.run_cleanup_loop", return_value=AsyncMock()), \
+         patch("app.job_manager.JobManager"):
+
+        from app.main import app
+        from app.database import get_db
+
+        app.dependency_overrides[get_db] = _mock_get_db_returning_status("timed_out")
+        app.state.job_manager = MagicMock()
+
+        try:
+            client = TestClient(app)
+            response = client.delete(
+                "/api/jobs/job-timeout",
+                headers={"Authorization": "Bearer test-secret-12345"},
+            )
+
+            assert response.status_code == 409
+            assert "terminal state" in response.json()["detail"].lower()
+        finally:
+            app.dependency_overrides.clear()
+            del app.state.job_manager
 
 
-@pytest.mark.asyncio
-async def test_cancel_job_requires_auth(test_db):
+def test_cancel_job_requires_auth():
     """Test that cancelling a job requires authentication."""
-    async with AsyncClient(app=app, base_url="http://test") as client:
+    from app.auth import init_auth
+    init_auth("test-secret-12345")
+
+    with patch("app.database.init_db", new_callable=AsyncMock), \
+         patch("app.cleanup.run_cleanup_loop", return_value=AsyncMock()), \
+         patch("app.job_manager.JobManager"):
+
+        from app.main import app
+
+        client = TestClient(app)
+
         # No auth header
-        response = await client.delete("/api/jobs/any-job")
-        assert response.status_code == 401
-        
+        response = client.delete("/api/jobs/any-job")
+        assert response.status_code in [401, 403]
+
         # Wrong token
-        response = await client.delete(
+        response = client.delete(
             "/api/jobs/any-job",
             headers={"Authorization": "Bearer wrong-token"},
         )

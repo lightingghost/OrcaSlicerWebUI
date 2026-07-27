@@ -69,14 +69,16 @@ def _load_parameters() -> List[ParameterDescriptor]:
     Raises:
         RuntimeError: If parameters.json cannot be found or parsed
     """
-    # Locate parameters.json relative to this module
-    data_dir = Path(__file__).parent.parent / "data"
-    params_file = data_dir / "parameters.json"
+    # Locate parameters.json:
+    # • data/ at repo root  (source of truth for local dev and Docker runtime)
+    module_dir  = Path(__file__).parent          # .../backend/app/routers
+    repo_root   = module_dir.parent.parent.parent  # OrcaSlicerWebUI/  (or /app/ in Docker)
+    params_file = repo_root / "data" / "parameters.json"
     
     if not params_file.exists():
         raise RuntimeError(
             f"parameters.json not found at {params_file}. "
-            "Run parameter_parser.py to generate it."
+            "Run scripts/parameter_parser.py to generate it."
         )
     
     try:

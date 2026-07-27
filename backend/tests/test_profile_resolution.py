@@ -8,6 +8,7 @@ apply when the same profile is selected.
 """
 
 import os
+import sys
 import pytest
 from pathlib import Path
 from fastapi.testclient import TestClient
@@ -21,6 +22,16 @@ os.environ.setdefault(
     'ORCA_CLI_PATH',
     '/home/odin/local/orcaslicerWebUI/OrcaSlicer/build/linux/release/OrcaSlicer_ubu64',
 )
+
+# `os.environ.setdefault` above only takes effect if app.config hasn't
+# already been imported by an earlier test file in this session (its
+# Settings() singleton is built once from whatever env vars were current
+# at THAT import, and cached — see app/config.py's get_settings()). Force
+# a fresh import here so this module's env vars actually apply, keeping
+# this file's behavior independent of overall suite run order.
+for _mod in list(sys.modules):
+    if _mod == 'app' or _mod.startswith('app.'):
+        del sys.modules[_mod]
 
 
 @pytest.fixture(scope="module")

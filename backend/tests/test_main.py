@@ -34,7 +34,27 @@ def mock_auth_module():
 
 
 @pytest.fixture
-def test_client(mock_cleanup_module, mock_database_module, mock_auth_module):
+def mock_workspace_init():
+    """
+    Prevent lifespan's `settings.init_user_workspace()` call from creating
+    real directories. The default settings singleton points workspace_root
+    at /app/workspace (production default), which this dev/test
+    environment has no write permission for — without this mock, every
+    lifespan-triggering test fails with PermissionError before it even
+    gets to the behavior under test.
+
+    Patched on the `Settings` class (not the `settings` instance) because
+    pydantic BaseSettings instances reject `delattr`, which
+    unittest.mock.patch.object's teardown requires when patching an
+    instance attribute that doesn't already exist on that instance.
+    """
+    from app.config import Settings
+    with patch.object(Settings, "init_user_workspace"):
+        yield
+
+
+@pytest.fixture
+def test_client(mock_cleanup_module, mock_database_module, mock_auth_module, mock_workspace_init):
     """
     Create a TestClient with mocked dependencies.
     
@@ -160,7 +180,7 @@ def test_health_endpoint_no_auth_required(test_client):
 
 
 @pytest.mark.asyncio
-async def test_lifespan_initializes_database(mock_database_module, mock_auth_module, mock_cleanup_module):
+async def test_lifespan_initializes_database(mock_database_module, mock_auth_module, mock_cleanup_module, mock_workspace_init):
     """Test that lifespan context manager initializes the database on startup."""
     from app.main import app
     
@@ -173,7 +193,7 @@ async def test_lifespan_initializes_database(mock_database_module, mock_auth_mod
 
 
 @pytest.mark.asyncio
-async def test_lifespan_initializes_auth(mock_database_module, mock_auth_module, mock_cleanup_module):
+async def test_lifespan_initializes_auth(mock_database_module, mock_auth_module, mock_cleanup_module, mock_workspace_init):
     """Test that lifespan context manager initializes authentication on startup."""
     from app.main import app
     
@@ -186,7 +206,7 @@ async def test_lifespan_initializes_auth(mock_database_module, mock_auth_module,
 
 
 @pytest.mark.asyncio
-async def test_lifespan_starts_cleanup_task(mock_database_module, mock_auth_module, mock_cleanup_module):
+async def test_lifespan_starts_cleanup_task(mock_database_module, mock_auth_module, mock_cleanup_module, mock_workspace_init):
     """Test that lifespan context manager starts the background cleanup task."""
     from app.main import app
     
@@ -197,7 +217,7 @@ async def test_lifespan_starts_cleanup_task(mock_database_module, mock_auth_modu
 
 
 @pytest.mark.asyncio
-async def test_lifespan_handles_database_init_failure(mock_auth_module, mock_cleanup_module):
+async def test_lifespan_handles_database_init_failure(mock_auth_module, mock_cleanup_module, mock_workspace_init):
     """Test that lifespan raises exception when database initialization fails."""
     from app.main import app
     
@@ -211,7 +231,7 @@ async def test_lifespan_handles_database_init_failure(mock_auth_module, mock_cle
 
 
 @pytest.mark.asyncio
-async def test_lifespan_continues_on_cleanup_task_failure(mock_database_module, mock_auth_module):
+async def test_lifespan_continues_on_cleanup_task_failure(mock_database_module, mock_auth_module, mock_workspace_init):
     """Test that lifespan continues startup even if cleanup task fails to start."""
     from app.main import app
     

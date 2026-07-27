@@ -43,8 +43,59 @@ export interface ProgressUpdateEvent {
   timestamp: string;
 }
 
+/**
+ * One plate object's live placement at the moment the job was submitted
+ * — same shape as arrangeSlice's PlateInstanceModel / projectSlice's
+ * ProjectExportObject: `instance_id` is the per-plate-object id (unique
+ * even for clones — see fileSlice.ts's UploadedFile.file_id), `file_id`
+ * is the REAL uploaded file backing its geometry (source_file_id for
+ * clones). Sending this is what lets Slice/Export use the plate exactly
+ * as shown in the viewport (including Arrange results, manual drags,
+ * rotations) instead of the raw, unpositioned uploaded files — see
+ * SubmitButton.tsx's assembleJobRequest for why this is necessary (the
+ * CLI has no other way to learn each object's position when arrange is
+ * disabled, and slicing 2+ un-positioned raw STL files reliably fails
+ * with CLI_OBJECTS_PARTLY_INSIDE since they'd all sit at/near their own
+ * mesh-native origin, overlapping and/or exceeding the bed).
+ */
+export interface JobInstancePlacement {
+  instance_id: string;
+  file_id: string;
+  x: number;
+  y: number;
+  z: number;
+  qx: number;
+  qy: number;
+  qz: number;
+  qw: number;
+  sx: number;
+  sy: number;
+  sz: number;
+  /** This instance's own per-object process config overrides — exactly
+   * parameterSlice's objectOverrides[fileId], NOTHING merged in from
+   * Global. A Global override already applies to the whole plate via
+   * the existing top-level `parameter_overrides` (CLI flags), so every
+   * object already inherits it for free — this field only needs to
+   * carry the DELTA, i.e. the keys THIS object has explicitly diverged
+   * on (see SubmitButton.tsx/TopBar.tsx's buildInstanceConfigOverrides).
+   * Every value is coerced to the native CLI's own string-serialized
+   * form (e.g. "1"/"0" for booleans, never "true"/"false" — see
+   * backend/app/routers/jobs.py's JobInstancePlacementModel.config_overrides
+   * doc comment for why). Backend embeds this 1:1 into the plate
+   * snapshot 3mf's Metadata/model_settings.config (see threemf_io.py's
+   * ProjectObject.config_overrides) so the real CLI applies it only to
+   * this object. Omitted/empty means this object fully inherits Global. */
+  config_overrides?: Record<string, string>;
+}
+
 export interface JobRequest {
   file_ids: string[];
+  /** Live per-object placement — see JobInstancePlacement's doc comment.
+   * Optional so a job can still be submitted before the viewport is
+   * ready (getPlateSnapshot not yet registered) or for job shapes with
+   * no meaningful geometry-placement (falls back to the CLI's own
+   * raw-file/arrange behavior server-side — see cli_builder.py). */
+  instances?: JobInstancePlacement[];
   printer_profile_path: string;
   process_profile_path: string;
   filament_profile_paths: string[];

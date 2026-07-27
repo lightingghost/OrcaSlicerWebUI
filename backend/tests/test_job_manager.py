@@ -6,15 +6,44 @@ Tests job submission, queueing, execution, timeout, and cancellation logic.
 
 import asyncio
 import json
+import struct
 import tempfile
 from pathlib import Path
 from unittest.mock import AsyncMock, MagicMock, patch
+from zipfile import ZipFile
 
 import pytest
 import aiosqlite
 
-from app.job_manager import JobManager
+from app.job_manager import JobManager, _build_positioned_project_3mf
 from app.config import Settings
+
+
+def _make_binary_stl_cube(size: float = 10.0) -> bytes:
+    """Minimal binary STL cube (12 triangles) — mirrors test_threemf_io.py's
+    identical helper, duplicated here to keep this test module
+    self-contained."""
+    s = size
+    verts = [
+        (0, 0, 0), (s, 0, 0), (s, s, 0), (0, s, 0),
+        (0, 0, s), (s, 0, s), (s, s, s), (0, s, s),
+    ]
+    faces = [
+        (0, 1, 2), (0, 2, 3),
+        (4, 6, 5), (4, 7, 6),
+        (0, 5, 1), (0, 4, 5),
+        (1, 6, 2), (1, 5, 6),
+        (2, 7, 3), (2, 6, 7),
+        (3, 4, 0), (3, 7, 4),
+    ]
+    out = bytearray(b"\x00" * 80)
+    out += struct.pack("<I", len(faces))
+    for tri in faces:
+        out += struct.pack("<3f", 0, 0, 0)
+        for idx in tri:
+            out += struct.pack("<3f", *verts[idx])
+        out += struct.pack("<H", 0)
+    return bytes(out)
 
 
 @pytest.fixture
@@ -813,3 +842,228 @@ async def test_job_manager_without_ws_manager(test_config, test_db):
     # Parse progress line should still work
     event = job_manager._parse_progress_line("Slicing: 50%", job_id)
     assert event is not None
+
+
+@pytest.mark.asyncio
+async def test_job_submission_with_instances_builds_positioned_3mf(test_config, test_db, temp_workspace):
+    """
+    When the job request carries `instances` (live per-object placement
+    from the viewport — see JobRequestModel.instances's doc comment), the
+    resulting cli_args must reference a single positioned .3mf snapshot
+    instead of the raw file_ids, and that 3mf must contain each object's
+    given position.
+
+    Regression coverage for: slicing 2+ objects failed with
+    CLI_OBJECTS_PARTLY_INSIDE because Slice always passed raw,
+    unpositioned STL files (each landing at its own mesh-native origin)
+    with no arrange fallback once arrange was disabled by default.
+    """
+    from zipfile import ZipFile
+
+    manager = JobManager(test_config, test_db)
+
+    session_id = "test-session"
+    session_dir = temp_workspace / "sessions" / session_id / "uploads"
+    session_dir.mkdir(parents=True)
+
+    def make_stl(path: Path, size: float):
+        import struct
+        s = size
+        verts = [
+            (0, 0, 0), (s, 0, 0), (s, s, 0), (0, s, 0),
+            (0, 0, s), (s, 0, s), (s, s, s), (0, s, s),
+        ]
+        faces = [
+            (0, 1, 2), (0, 2, 3), (4, 6, 5), (4, 7, 6), (0, 5, 1), (0, 4, 5),
+            (1, 6, 2), (1, 5, 6), (2, 7, 3), (2, 6, 7), (3, 4, 0), (3, 7, 4),
+        ]
+        data = bytearray(b"\x00" * 80)
+        data += struct.pack("<I", len(faces))
+        for tri in faces:
+            data += struct.pack("<3f", 0, 0, 0)
+            for idx in tri:
+                data += struct.pack("<3f", *verts[idx])
+            data += struct.pack("<H", 0)
+        path.write_bytes(bytes(data))
+
+    file_id_1 = "11111111-1111-1111-1111-111111111111"
+    file_id_2 = "22222222-2222-2222-2222-222222222222"
+    path_1 = session_dir / f"{file_id_1}.stl"
+    path_2 = session_dir / f"{file_id_2}.stl"
+    make_stl(path_1, 10.0)
+    make_stl(path_2, 20.0)
+
+    async with aiosqlite.connect(test_db) as db:
+        for fid, p in [(file_id_1, path_1), (file_id_2, path_2)]:
+            await db.execute(
+                """
+                INSERT INTO files (file_id, session_id, original_name, extension, size_bytes, storage_path, uploaded_at)
+                VALUES (?, ?, ?, ?, ?, ?, ?)
+                """,
+                (fid, session_id, p.name, "stl", p.stat().st_size, str(p), "2024-01-01T00:00:00Z"),
+            )
+        await db.commit()
+
+    profiles_dir = test_config.profiles_root / "test"
+    profiles_dir.mkdir(parents=True, exist_ok=True)
+    (profiles_dir / "printer.json").write_text("{}")
+    (profiles_dir / "process.json").write_text("{}")
+    (profiles_dir / "filament.json").write_text("{}")
+
+    job_request = {
+        "file_ids": [file_id_1, file_id_2],
+        "instances": [
+            {
+                "instance_id": "instA", "file_id": file_id_1,
+                "x": 30.0, "y": 40.0, "z": 0.0,
+                "qx": 0.0, "qy": 0.0, "qz": 0.0, "qw": 1.0,
+                "sx": 1.0, "sy": 1.0, "sz": 1.0,
+            },
+            {
+                "instance_id": "instB", "file_id": file_id_2,
+                "x": -50.0, "y": 60.0, "z": 0.0,
+                "qx": 0.0, "qy": 0.0, "qz": 0.0, "qw": 1.0,
+                "sx": 1.0, "sy": 1.0, "sz": 1.0,
+            },
+        ],
+        "action": "slice",
+        "plate_number": 0,
+        "printer_profile_path": "test/printer.json",
+        "process_profile_path": "test/process.json",
+        "filament_profile_paths": ["test/filament.json"],
+    }
+
+    job_id = await manager.submit(job_request, session_id)
+
+    async with aiosqlite.connect(test_db) as db:
+        db.row_factory = aiosqlite.Row
+        cursor = await db.execute("SELECT cli_args FROM jobs WHERE job_id = ?", (job_id,))
+        row = await cursor.fetchone()
+        cli_args = json.loads(row["cli_args"])
+
+    # The raw STL paths must NOT appear as separate input arguments —
+    # they've been replaced by a single positioned 3mf snapshot.
+    assert str(path_1) not in cli_args
+    assert str(path_2) not in cli_args
+    snapshot_args = [a for a in cli_args if a.endswith("_plate_snapshot.3mf")]
+    assert len(snapshot_args) == 1
+    snapshot_path = Path(snapshot_args[0])
+    assert snapshot_path.exists()
+
+    with ZipFile(snapshot_path) as zf:
+        model_xml = zf.read("3D/3dmodel.model").decode("utf-8")
+    assert 'transform="1.0 0.0 0.0 0.0 1.0 0.0 0.0 0.0 1.0 30.0 40.0 0.0"' in model_xml
+    assert 'transform="1.0 0.0 0.0 0.0 1.0 0.0 0.0 0.0 1.0 -50.0 60.0 0.0"' in model_xml
+
+
+@pytest.mark.asyncio
+async def test_job_submission_without_instances_uses_raw_file_ids(test_config, test_db, temp_workspace):
+    """Backward-compat: a job request with no `instances` field must
+    behave exactly as before (raw file paths passed directly), since
+    single-object jobs / any client not yet sending live placement must
+    keep working unchanged."""
+    manager = JobManager(test_config, test_db)
+
+    session_id = "test-session"
+    session_dir = temp_workspace / "sessions" / session_id / "uploads"
+    session_dir.mkdir(parents=True)
+
+    file_id = "33333333-3333-3333-3333-333333333333"
+    storage_path = session_dir / f"{file_id}.stl"
+    storage_path.write_text("dummy stl content")
+
+    async with aiosqlite.connect(test_db) as db:
+        await db.execute(
+            """
+            INSERT INTO files (file_id, session_id, original_name, extension, size_bytes, storage_path, uploaded_at)
+            VALUES (?, ?, ?, ?, ?, ?, ?)
+            """,
+            (file_id, session_id, "test-file.stl", "stl", storage_path.stat().st_size, str(storage_path), "2024-01-01T00:00:00Z"),
+        )
+        await db.commit()
+
+    profiles_dir = test_config.profiles_root / "test"
+    profiles_dir.mkdir(parents=True, exist_ok=True)
+    (profiles_dir / "printer.json").write_text("{}")
+    (profiles_dir / "process.json").write_text("{}")
+    (profiles_dir / "filament.json").write_text("{}")
+
+    job_request = {
+        "file_ids": [file_id],
+        "action": "slice",
+        "plate_number": 0,
+        "printer_profile_path": "test/printer.json",
+        "process_profile_path": "test/process.json",
+        "filament_profile_paths": ["test/filament.json"],
+    }
+
+    job_id = await manager.submit(job_request, session_id)
+
+    async with aiosqlite.connect(test_db) as db:
+        db.row_factory = aiosqlite.Row
+        cursor = await db.execute("SELECT cli_args FROM jobs WHERE job_id = ?", (job_id,))
+        row = await cursor.fetchone()
+        cli_args = json.loads(row["cli_args"])
+
+    assert str(storage_path) in cli_args
+
+
+class TestBuildPositionedProject3mfConfigOverrides:
+    """
+    Covers _build_positioned_project_3mf's per-object config_overrides
+    passthrough — i.e. that a JobInstancePlacementModel's own
+    config_overrides ends up embedded in the resulting snapshot 3mf's
+    Metadata/model_settings.config (see threemf_io.py's
+    ProjectObject.config_overrides / write_3mf for the actual embedding
+    logic this exercises end-to-end).
+    """
+
+    def test_instance_config_overrides_appear_in_snapshot_3mf(self, tmp_path: Path):
+        stl_path = tmp_path / "cube.stl"
+        stl_path.write_bytes(_make_binary_stl_cube(10.0))
+
+        instances = [
+            {
+                "instance_id": "obj-1",
+                "file_id": "obj-1",
+                "x": 0.0,
+                "y": 0.0,
+                "config_overrides": {"brim_type": "outer_brim_only", "brim_width": "5"},
+            },
+            {
+                "instance_id": "obj-2",
+                "file_id": "obj-2",
+                "x": 50.0,
+                "y": 0.0,
+                # No overrides — must NOT appear in model_settings.config at all.
+            },
+        ]
+        file_paths = {"obj-1": stl_path, "obj-2": stl_path}
+        output_dir = tmp_path / "output"
+        output_dir.mkdir()
+
+        snapshot_path = _build_positioned_project_3mf(instances, file_paths, output_dir)
+
+        with ZipFile(snapshot_path) as zf:
+            names = set(zf.namelist())
+            assert "Metadata/model_settings.config" in names
+            config_xml = zf.read("Metadata/model_settings.config").decode("utf-8")
+
+        assert '<object id="1">' in config_xml
+        assert '<metadata key="brim_type" value="outer_brim_only"/>' in config_xml
+        assert '<metadata key="brim_width" value="5"/>' in config_xml
+        assert '<object id="2">' not in config_xml
+
+    def test_instance_without_config_overrides_key_produces_no_model_settings_config(self, tmp_path: Path):
+        stl_path = tmp_path / "cube.stl"
+        stl_path.write_bytes(_make_binary_stl_cube(10.0))
+
+        instances = [{"instance_id": "obj-1", "file_id": "obj-1", "x": 0.0, "y": 0.0}]
+        file_paths = {"obj-1": stl_path}
+        output_dir = tmp_path / "output"
+        output_dir.mkdir()
+
+        snapshot_path = _build_positioned_project_3mf(instances, file_paths, output_dir)
+
+        with ZipFile(snapshot_path) as zf:
+            assert "Metadata/model_settings.config" not in set(zf.namelist())

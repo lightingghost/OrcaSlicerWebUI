@@ -48,9 +48,10 @@ describe('TransformPanel', () => {
 
     expect(rotateInput.value).toBe('0');
     expect(scaleInput.value).toBe('1');
-    // Default is 2 (native's own "auto arrange" value) — see
+    // Default is 0 (disabled) — Arrange is now a separate, explicit
+    // action, so Slice no longer auto-arranges by default. See
     // transformSlice.ts's comment on why.
-    expect(arrangeSelect.value).toBe('2');
+    expect(arrangeSelect.value).toBe('0');
   });
 
   it('updates store when numeric inputs change', async () => {
@@ -102,10 +103,7 @@ describe('TransformPanel', () => {
 
     const arrangeSelect = screen.getByLabelText('Arrange Mode') as HTMLSelectElement;
 
-    // Default is arrange=2 (native's own "auto arrange" value), which
-    // also shows sub-options — set to 0 first to verify the "hidden" case
-    // before switching to 1.
-    fireEvent.change(arrangeSelect, { target: { value: '0' } });
+    // Default is arrange=0 (disabled), which hides sub-options.
     expect(screen.queryByText('Arrange Options')).not.toBeInTheDocument();
 
     // Change to Mode 1
