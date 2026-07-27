@@ -74,6 +74,16 @@ jobs:
       - name: Checkout
         uses: actions/checkout@v4
 
+      # GHCR (and OCI registries generally) require lowercase image
+      # names, but `github.repository` preserves the repo's actual case
+      # (here, "lightingghost/OrcaSlicerWebUI") — pushing with that as-is
+      # fails with "invalid reference format: repository name ... must be
+      # lowercase". GitHub Actions expressions have no built-in lowercase
+      # function, so normalize it here and let it override the
+      # workflow-level IMAGE_NAME default for the rest of this job.
+      - name: Compute lowercase image name
+        run: echo "IMAGE_NAME=$(echo '${{ github.repository }}' | tr '[:upper:]' '[:lower:]')" >> "$GITHUB_ENV"
+
       - name: Load build config (ORCASLICER_VERSION)
         run: |
           # build.env is comment-heavy (see the file itself) — $GITHUB_ENV
@@ -164,6 +174,10 @@ jobs:
     steps:
       - name: Checkout
         uses: actions/checkout@v4
+
+      # See the same step's comment in the build job above.
+      - name: Compute lowercase image name
+        run: echo "IMAGE_NAME=$(echo '${{ github.repository }}' | tr '[:upper:]' '[:lower:]')" >> "$GITHUB_ENV"
 
       - name: Load build config (ORCASLICER_VERSION)
         run: |
