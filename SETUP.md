@@ -13,14 +13,19 @@ cd /home/odin/local/orcaslicerWebUI/OrcaSlicerWebUI
 
 cat build.env
 # ORCASLICER_VERSION=2.4.2
-# ARCH=x86_64
 ```
 
 **Valid values:**
 - `ORCASLICER_VERSION`: Version number **without leading "v"** (e.g. `2.4.2`, not `v2.4.2`)
-- `ARCH`: `x86_64` or `aarch64` (matches OrcaSlicer's AppImage release naming)
 
 To use a different version, edit `build.env` before building.
+
+There's no architecture setting to configure: the Dockerfile automatically
+downloads the right OrcaSlicer AppImage (x86_64 or aarch64) for whichever
+platform Buildx is building for (`docker compose build` targets your
+host's own architecture; the CI workflow builds and publishes both
+`linux/amd64` and `linux/arm64` — see
+`.github/workflows/docker-build.yml`).
 
 ### Step 2: Configure API Secret (Optional but Recommended)
 
@@ -216,13 +221,16 @@ docker compose --env-file build.env up -d
 
 The `.github/workflows/docker-build.yml` workflow automatically:
 1. Reads `build.env` on every push to `main`
-2. Builds the image with those pinned version/arch settings
-3. Publishes to `ghcr.io/<your-username>/orcaslicerwebui:<version>`
+2. Builds `linux/amd64` and `linux/arm64` natively, each on its own
+   GitHub-hosted runner (`ubuntu-24.04` / `ubuntu-24.04-arm`)
+3. Merges both into a single multi-arch manifest and publishes it to
+   `ghcr.io/<your-username>/orcaslicerwebui:<version>`
 
 **To use a published image:**
 
 ```bash
-# Pull from GHCR (replace <your-username> with your GitHub username)
+# Pull from GHCR (replace <your-username> with your GitHub username).
+# Docker automatically selects the amd64 or arm64 variant matching your host.
 docker pull ghcr.io/<your-username>/orcaslicerwebui:2.4.2
 
 # Or reference in docker-compose.yml:

@@ -5,8 +5,19 @@
 #
 # Build args (normally sourced from build.env):
 #   ORCASLICER_VERSION  e.g. 2.4.2  (tag WITHOUT leading "v")
-#   ARCH                x86_64 | aarch64
 #   VITE_API_SECRET     shared secret baked into the frontend bundle
+#
+# Architecture is intentionally NOT a manual build-arg. This single
+# Dockerfile builds for whichever platform Buildx is targeting via the
+# automatic TARGETARCH build-arg (see stage 3 below) — Docker sets this
+# to "amd64" or "arm64" per the `--platform`/`platforms:` value the
+# builder is invoked with, whether that's a plain local `docker build`
+# (defaults to the host's arch), or a CI matrix building each platform
+# natively on its own runner (see .github/workflows/docker-build.yml).
+# There's no need for separate per-arch Dockerfiles: every base image
+# used below (alpine/git, python:3.11-slim, node:18, ubuntu:24.04) ships
+# both amd64 and arm64 variants, and OrcaSlicer itself publishes an
+# aarch64 AppImage release alongside the x86_64 one.
 #
 # Stages:
 #   1. orca-source   - shallow-clone OrcaSlicer source at the pinned tag
@@ -18,7 +29,6 @@
 #   6. runtime       - ubuntu:24.04 + OrcaSlicer CLI runtime libs + app
 
 ARG ORCASLICER_VERSION=2.4.2
-ARG ARCH=x86_64
 
 # ---------------------------------------------------------------------------
 # Stage 1: fetch OrcaSlicer source at the pinned tag (shallow clone)
@@ -56,15 +66,19 @@ RUN mkdir -p /gen/out/data && \
 # ---------------------------------------------------------------------------
 FROM ubuntu:24.04 AS orca-appimage
 ARG ORCASLICER_VERSION
-ARG ARCH
+# TARGETARCH is populated automatically by Buildx ("amd64" or "arm64") to
+# match whichever platform this stage is being built for — no manual
+# build-arg needed. Mapped below to OrcaSlicer's own AppImage asset
+# naming convention (x86_64 / aarch64), which differs from Docker's.
+ARG TARGETARCH
 RUN apt-get update && \
     apt-get install --no-install-recommends -y ca-certificates curl && \
     rm -rf /var/lib/apt/lists/*
 WORKDIR /appimage
-RUN case "${ARCH}" in \
-      x86_64)  ASSET="OrcaSlicer_Linux_AppImage_Ubuntu2404_V${ORCASLICER_VERSION}.AppImage" ;; \
-      aarch64) ASSET="OrcaSlicer_Linux_AppImage_Ubuntu2404_aarch64_V${ORCASLICER_VERSION}.AppImage" ;; \
-      *) echo "Unsupported ARCH: ${ARCH}" >&2; exit 1 ;; \
+RUN case "${TARGETARCH}" in \
+      amd64) ASSET="OrcaSlicer_Linux_AppImage_Ubuntu2404_V${ORCASLICER_VERSION}.AppImage" ;; \
+      arm64) ASSET="OrcaSlicer_Linux_AppImage_Ubuntu2404_aarch64_V${ORCASLICER_VERSION}.AppImage" ;; \
+      *) echo "Unsupported TARGETARCH: ${TARGETARCH}" >&2; exit 1 ;; \
     esac && \
     URL="https://github.com/OrcaSlicer/OrcaSlicer/releases/download/v${ORCASLICER_VERSION}/${ASSET}" && \
     echo "Downloading ${URL}" && \

@@ -12,6 +12,7 @@ A web-based interface for [OrcaSlicer](https://github.com/OrcaSlicer/OrcaSlicer)
 - 🎛️ **Parameter Control**: Fine-tune 800+ slicing parameters via web UI
 - 🚀 **Job Queue**: Concurrent slicing with configurable limits
 - 🐳 **Docker Deploy**: Single-container image with frontend + backend + OrcaSlicer CLI
+- 🖥️ **Multi-arch**: Published images support both `linux/amd64` and `linux/arm64`
 
 ## 🚀 Quick Start
 
@@ -20,11 +21,10 @@ A web-based interface for [OrcaSlicer](https://github.com/OrcaSlicer/OrcaSlicer)
 git clone <your-repo-url>
 cd OrcaSlicerWebUI
 
-# Configure the OrcaSlicer version to use (optional, defaults to 2.4.2/x86_64)
-# Edit build.env if you want a different version or architecture
+# Configure the OrcaSlicer version to use (optional, defaults to 2.4.2)
+# Edit build.env if you want a different version
 cat build.env
 # ORCASLICER_VERSION=2.4.2
-# ARCH=x86_64
 
 # Build and start (first time: ~5-10 minutes)
 docker compose --env-file build.env build
