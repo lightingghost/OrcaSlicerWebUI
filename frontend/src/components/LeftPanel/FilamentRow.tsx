@@ -12,9 +12,11 @@
  * - Wired to profileSlice.toggleFilamentProfile
  */
 
-import { useState, useMemo, useEffect } from 'react';
+import { useState, useMemo, useEffect, useCallback } from 'react';
+import { Trash2 } from 'lucide-react';
 import { useStore } from '../../store';
 import { apiClient } from '../../api/client';
+import type { ProfileEntry } from '../../store';
 import { FilamentConfigDialog } from './FilamentConfigDialog';
 
 /**
@@ -56,6 +58,8 @@ interface FilamentPickerModalProps {
 interface FilamentProfileInfo {
   name: string;
   path: string;
+  manufacturer: string;
+  filename: string;
   material_type: string;
   compatible_printers: string[];
 }
@@ -74,12 +78,26 @@ const FilamentPickerModal: React.FC<FilamentPickerModalProps> = ({
   onToggle,
   selectedPrinterName,
 }) => {
+  const { removeSelectedFilamentProfileByPath } = useStore();
   const [filterManufacturer, setFilterManufacturer] = useState<string>('all');
   const [filterMaterial, setFilterMaterial] = useState<string>('all');
   const [filterCompatibility, setFilterCompatibility] = useState<'all' | 'compatible'>('all');
   const [metadata, setMetadata] = useState<FilamentMetadata | null>(null);
   const [isLoadingMetadata, setIsLoadingMetadata] = useState(false);
   const [userFilaments, setUserFilaments] = useState<Array<{ name: string; path: string }>>([]);
+
+  const refreshUserFilaments = useCallback(() => {
+    return apiClient.listFilamentConfigs()
+      .then(configs => {
+        // Use all non-autosave configs as user filaments
+        const saved = configs.filter(c => !c.autosave).map(c => ({
+          name: c.name,
+          path: c.path,
+        }));
+        setUserFilaments(saved);
+      })
+      .catch(err => console.error('Failed to fetch user filaments:', err));
+  }, []);
 
   // Fetch system filament metadata + user-saved filaments when modal opens
   useEffect(() => {
@@ -96,11 +114,18 @@ const FilamentPickerModal: React.FC<FilamentPickerModalProps> = ({
           const materialTypes = new Set<string>();
           const fallbackFilaments: FilamentProfileInfo[] = [];
           filamentProfiles.forEach(profile => {
-            const mfr = profile.path.match(/^([^/]+)\//)?.[1];
+            const mfr = (profile as { manufacturer?: string }).manufacturer;
             if (mfr) manufacturers.add(mfr);
             const mat = extractMaterialType(profile.name);
             materialTypes.add(mat);
-            fallbackFilaments.push({ name: profile.name, path: profile.path, material_type: mat, compatible_printers: [] });
+            fallbackFilaments.push({
+              name: profile.name,
+              path: profile.path,
+              manufacturer: mfr ?? '',
+              filename: (profile as { filename?: string }).filename ?? '',
+              material_type: mat,
+              compatible_printers: [],
+            });
           });
           setMetadata({ manufacturers: Array.from(manufacturers).sort(), material_types: Array.from(materialTypes).sort(), filaments: fallbackFilaments });
         })
@@ -108,26 +133,35 @@ const FilamentPickerModal: React.FC<FilamentPickerModalProps> = ({
     }
 
     // Fetch user-saved filament configs every time the modal opens
-    apiClient.listFilamentConfigs()
-      .then(configs => {
-        // Use all non-autosave configs as user filaments
-        const saved = configs.filter(c => !c.autosave).map(c => ({
-          name: c.name,
-          path: `user:${c.path}`,
-        }));
-        setUserFilaments(saved);
-      })
-      .catch(err => console.error('Failed to fetch user filaments:', err));
-  }, [isOpen]);
+    refreshUserFilaments();
+  }, [isOpen, refreshUserFilaments]);
+
+  const handleDeleteUserFilament = async (uf: { name: string; path: string }) => {
+    if (!window.confirm(`Delete saved filament config "${uf.name}"? This cannot be undone.`)) {
+      return;
+    }
+    try {
+      await apiClient.deleteFilamentConfig(uf.name);
+      await refreshUserFilaments();
+      // If it was currently selected on the plate, remove it from the
+      // selection so the app doesn't keep referencing a config that no
+      // longer exists on disk.
+      if (selectedPaths.includes(uf.path)) {
+        removeSelectedFilamentProfileByPath(uf.path);
+      }
+    } catch (err) {
+      console.error('Failed to delete filament config:', err);
+    }
+  };
 
   // Filter profiles based on selections
   const filteredProfiles = useMemo(() => {
     if (!metadata || !metadata.filaments) return [];
     
     return metadata.filaments.filter(profile => {
-      // Filter by manufacturer (based on path)
+      // Filter by manufacturer
       if (filterManufacturer !== 'all') {
-        if (!profile.path.startsWith(filterManufacturer + '/')) {
+        if (profile.manufacturer !== filterManufacturer) {
           return false;
         }
       }
@@ -265,7 +299,7 @@ const FilamentPickerModal: React.FC<FilamentPickerModalProps> = ({
               return (
                 <button
                   key={profile.path}
-                  onClick={() => onToggle(profile)}
+                  onClick={() => onToggle({ ...profile, category: 'filament' })}
                   className={`w-full p-3 rounded text-left transition-colors ${
                     isSelected
                       ? 'bg-purple-600 text-white'
@@ -306,17 +340,31 @@ const FilamentPickerModal: React.FC<FilamentPickerModalProps> = ({
               {userFilaments.map(uf => {
                 const isSelected = selectedPaths.includes(uf.path);
                 return (
-                  <button key={uf.path} onClick={() => onToggle({ ...uf, category: 'filament', isUserConfig: true })}
-                    className={`w-full p-3 rounded text-left transition-colors ${
+                  <div key={uf.path}
+                    className={`w-full flex items-center gap-2 p-3 rounded transition-colors ${
                       isSelected ? 'bg-purple-600 text-white' : 'bg-gray-700/80 text-gray-200 hover:bg-gray-600 border border-dashed border-gray-600'
                     }`}>
-                    <div className="flex items-center justify-between">
+                    <button
+                      onClick={() => onToggle({ ...uf, category: 'filament', is_user: true })}
+                      className="flex-1 min-w-0 flex items-center justify-between text-left"
+                    >
                       <span className="text-sm font-medium truncate">{uf.name}</span>
                       <span className="text-xs bg-teal-700 text-teal-100 px-2 py-0.5 rounded ml-2 flex-shrink-0">
                         user
                       </span>
-                    </div>
-                  </button>
+                    </button>
+                    <button
+                      onClick={(e) => {
+                        e.stopPropagation();
+                        handleDeleteUserFilament(uf);
+                      }}
+                      title={`Delete "${uf.name}"`}
+                      aria-label={`Delete ${uf.name}`}
+                      className="flex-shrink-0 p-1 rounded text-gray-400 hover:text-red-400 hover:bg-gray-800/60 transition-colors"
+                    >
+                      <Trash2 className="w-4 h-4" />
+                    </button>
+                  </div>
                 );
               })}
             </div>
@@ -395,7 +443,15 @@ export const FilamentRow: React.FC = () => {
   } = useStore();
 
   const [isModalOpen, setIsModalOpen] = useState(false);
-  const [editingFilament, setEditingFilament] = useState<{ profile: { name: string; path: string }; index: number } | null>(null);
+  // Only the index is tracked here (not a snapshot of the profile) — the
+  // dialog always needs the CURRENT profile at that slot, which changes
+  // when FilamentConfigDialog.handleSaveConfirm calls
+  // replaceSelectedFilamentProfileAt after a Save. Looking it up from
+  // selectedFilamentProfiles below (rather than storing the ProfileEntry
+  // itself here) is what lets that replacement flow through to the
+  // still-open dialog automatically.
+  const [editingIndex, setEditingIndex] = useState<number | null>(null);
+  const editingProfile = editingIndex !== null ? selectedFilamentProfiles[editingIndex] ?? null : null;
 
   // Note: auto-save on filament selection change is handled centrally by
   // ConfigAutoSave.tsx (debounced), avoiding duplicate saveUserConfig() calls.
@@ -408,7 +464,7 @@ export const FilamentRow: React.FC = () => {
     setIsModalOpen(true);
   };
 
-  const handleRemoveFilament = (profile: { name: string; path: string }) => {
+  const handleRemoveFilament = (profile: ProfileEntry) => {
     toggleFilamentProfile(profile);
   };
 
@@ -449,7 +505,7 @@ export const FilamentRow: React.FC = () => {
               key={profile.path}
               profile={profile}
               onRemove={() => handleRemoveFilament(profile)}
-              onEdit={() => setEditingFilament({ profile, index: idx })}
+              onEdit={() => setEditingIndex(idx)}
             />
           ))
         )}
@@ -467,11 +523,14 @@ export const FilamentRow: React.FC = () => {
 
       {/* Filament Config Edit Dialog */}
       <FilamentConfigDialog
-        isOpen={editingFilament !== null}
-        onClose={() => setEditingFilament(null)}
-        profilePath={editingFilament?.profile.path ?? null}
-        filamentName={editingFilament?.profile.name ?? ''}
-        filamentIndex={editingFilament?.index ?? 0}
+        isOpen={editingProfile !== null}
+        onClose={() => setEditingIndex(null)}
+        profilePath={editingProfile?.path ?? null}
+        profileManufacturer={editingProfile?.manufacturer}
+        profileFilename={editingProfile?.filename}
+        isUserConfig={editingProfile?.is_user === true}
+        filamentName={editingProfile?.name ?? ''}
+        filamentIndex={editingIndex ?? 0}
       />
     </div>
   );

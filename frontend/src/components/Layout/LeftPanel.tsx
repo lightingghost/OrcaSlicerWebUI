@@ -79,6 +79,9 @@ export const LeftPanel: React.FC = () => {
         isOpen={configDialogOpen}
         onClose={() => setConfigDialogOpen(false)}
         profilePath={selectedPrinterProfile?.path ?? null}
+        profileManufacturer={selectedPrinterProfile?.manufacturer}
+        profileFilename={selectedPrinterProfile?.filename}
+        isUserConfig={selectedPrinterProfile?.is_user === true}
         printerName={selectedPrinterProfile?.name ?? ''}
       />
     </aside>

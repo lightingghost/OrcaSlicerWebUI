@@ -116,6 +116,277 @@ def _build_positioned_project_3mf(
     return snapshot_path
 
 
+# Matches PrintConfig.cpp's own default_value for "filename_format"
+# (confirmed against data/parameters.json) — used whenever a job's
+# cli_args don't carry an explicit `--filename-format=...` override
+# (i.e. the user never touched that field), since native OrcaSlicer
+# applies this default naming scheme unconditionally, not only when
+# explicitly configured. See _apply_filename_format's doc comment for
+# why the CLI itself never actually performs this substitution.
+DEFAULT_FILENAME_FORMAT = "{input_filename_base}_{filament_type[initial_tool]}_{print_time}.gcode"
+
+# Matches a `{placeholder}` or `{placeholder[index]}` token in a
+# filename_format string (PrintConfig.cpp's PlaceholderParser syntax).
+# The `[index]` suffix (e.g. "[initial_tool]") is captured but discarded
+# by _substitute_filename_format — this app only ever resolves a single
+# value per placeholder (there's exactly one "first extruder"/plate per
+# completed slice job here), so the index itself carries no additional
+# information to act on.
+_FILENAME_FORMAT_PLACEHOLDER_RE = re.compile(r"\{([a-zA-Z_]+)(?:\[[^\]]*\])?\}")
+
+
+def _extract_input_file_paths(cli_args: list[str]) -> list[str]:
+    """
+    Extract the positional input file arguments from an already-built
+    cli_args list — everything between the CLI binary path (index 0) and
+    the first `--flag` argument. Relies on build_cli_args's fixed
+    ordering (input files always precede the action flag, which is
+    always the first `--`-prefixed argument — see build_cli_args's
+    "1. Input files" / "2. Action flag" sections).
+    """
+    paths = []
+    for arg in cli_args[1:]:
+        if arg.startswith("--"):
+            break
+        paths.append(arg)
+    return paths
+
+
+def _extract_gcode_config_value(gcode_text: str, key: str) -> Optional[str]:
+    """
+    Extract a `; {key} = value` line from a sliced gcode's own
+    CONFIG_BLOCK footer (a full dump of every config option's resolved
+    value that the CLI always writes — e.g. "; filament_type = PETG",
+    "; estimated printing time (normal mode) = 15m 47s"). Returns the
+    trimmed value, or None if the key isn't present in this file.
+    """
+    match = re.search(rf"^; {re.escape(key)} = (.+)$", gcode_text, re.MULTILINE)
+    return match.group(1).strip() if match else None
+
+
+def _short_time(dhms: str) -> str:
+    """
+    Port of native OrcaSlicer's `short_time()` (libslic3r/Utils.hpp):
+    parses a "DDd HHh MMm SSs"-style duration string (the exact format
+    the gcode footer's "estimated printing time (normal mode)" line
+    uses — see Utils.hpp's get_time_dhms, which produces that string in
+    the first place) and re-renders it rounded to whole minutes (once
+    days or hours are involved) with spaces removed, matching the
+    {print_time} placeholder's actual on-disk naming convention (e.g.
+    "15m 47s" -> "15m47s", confirmed against a real native-named export:
+    box_PETG_15m47s.gcode).
+    """
+    days = hours = minutes = seconds = 0
+    f_seconds = 0.0
+
+    if "d" in dhms:
+        m = re.match(r"(\d+)d\s+(\d+)h\s+(\d+)m\s+(\d+)s", dhms)
+        if m:
+            days, hours, minutes, seconds = (int(g) for g in m.groups())
+    elif "h" in dhms:
+        m = re.match(r"(\d+)h\s+(\d+)m\s+(\d+)s", dhms)
+        if m:
+            hours, minutes, seconds = (int(g) for g in m.groups())
+    elif "m" in dhms:
+        m = re.match(r"(\d+)m\s+(\d+)s", dhms)
+        if m:
+            minutes, seconds = (int(g) for g in m.groups())
+    elif "s" in dhms:
+        m = re.match(r"([\d.]+)s", dhms)
+        if m:
+            f_seconds = float(m.group(1))
+            seconds = int(f_seconds)
+
+    # Round to full minutes once days or hours are involved (matches
+    # native's own rounding rule exactly).
+    if days + hours > 0 and seconds >= 30:
+        minutes += 1
+        if minutes == 60:
+            minutes = 0
+            hours += 1
+            if hours == 24:
+                hours = 0
+                days += 1
+
+    if days > 0:
+        return f"{days}d{hours}h{minutes}m"
+    if hours > 0:
+        return f"{hours}h{minutes}m"
+    if minutes > 0:
+        return f"{minutes}m{seconds}s"
+    if seconds >= 1:
+        return f"{seconds}s"
+    if 0 < f_seconds < 1:
+        return "<1s"
+    return "0s"
+
+
+def _substitute_filename_format(
+    filename_format: str,
+    input_filename_base: str,
+    filament_type: str,
+    print_time: str,
+) -> str:
+    """
+    Minimal PlaceholderParser-style substitution covering the three
+    placeholders filename_format's own tooltip/default value documents:
+    {input_filename_base}, {filament_type[N]} (N is always ignored here
+    — see _FILENAME_FORMAT_PLACEHOLDER_RE's doc comment), and
+    {print_time}. Any other placeholder is left as literal text rather
+    than raising, since a partial substitution is more useful than
+    failing an already-successful slice job over an unsupported
+    placeholder — native's own PlaceholderParser supports substantially
+    more expressions (arithmetic, conditionals, other config keys) than
+    this app resolves.
+    """
+    values = {
+        "input_filename_base": input_filename_base,
+        "filament_type": filament_type,
+        "print_time": print_time,
+    }
+
+    def replace(match: "re.Match[str]") -> str:
+        return values.get(match.group(1), match.group(0))
+
+    return _FILENAME_FORMAT_PLACEHOLDER_RE.sub(replace, filename_format)
+
+
+def _extract_cli_flag_value(cli_args: list[str], flag: str) -> Optional[str]:
+    """
+    Find `--{flag}=value` in an already-built cli_args list and return its
+    value, or None if the flag isn't present. Values are taken verbatim
+    (only split on the FIRST '=') since cli_builder.py appends parameter
+    overrides as `--{cli-flag}={value}` in a single argv element (no shell
+    involved — see build_cli_args), so the value is preserved exactly as
+    the user typed it, including any '=' it may itself contain.
+    """
+    prefix = f"--{flag}="
+    for arg in cli_args:
+        if arg.startswith(prefix):
+            return arg[len(prefix):]
+    return None
+
+
+def _extract_post_process_from_settings_file(cli_args: list[str]) -> Optional[str]:
+    """
+    Fall back to reading `post_process` directly out of the resolved
+    process settings file passed via `--load-settings`, for jobs where the
+    value was saved INTO a process config rather than left as a live,
+    unsaved Process-panel edit.
+
+    `post_process` is deliberately never included in `parameter_overrides`
+    (cli_builder.py's own doc comment: process-panel edits go through
+    `--{flag}=value` CLI args, which is what `_extract_cli_flag_value`
+    reads) once the user has saved it into the profile itself — saving
+    moves the value into the profile's own JSON (see
+    ProcessSelector.tsx's buildSavePayload / parameterSlice.ts's "changed
+    vs profileDefaults" comparison, which is what makes the Reset button
+    correctly stop showing "changed" after a save). The value still
+    reaches the CLI just fine (the resolved settings file IS loaded via
+    --load-settings, so slicing itself picks it up) — but this app's own
+    post-processing step (`_run_post_process_scripts`, needed because the
+    headless CLI binary never runs scripts itself) only ever looked at
+    the CLI flag, so a saved-and-reselected `post_process` value was
+    silently never executed. This reads the same settings file the CLI
+    itself loads, so it works whether the value came from a live
+    parameter_overrides edit (though that path is covered by
+    _extract_cli_flag_value already) or from a saved config.
+
+    `--load-settings` always lists the printer profile (if any) followed
+    by the process profile (see cli_builder.py's build_cli_args) — the
+    process path is therefore always the LAST entry in the
+    semicolon-joined list, whether or not a printer path is also present.
+    """
+    # Unlike `--post-process=value` (a single argv element,
+    # `_extract_cli_flag_value`'s form), `--load-settings` is built as TWO
+    # separate argv elements — `--load-settings` followed by its value as
+    # its own element (see cli_builder.py's build_cli_args:
+    # `args.extend(["--load-settings", ";".join(load_settings_paths)])`)
+    # — so it needs its own lookup here rather than reusing
+    # _extract_cli_flag_value.
+    settings_value: Optional[str] = None
+    for i, arg in enumerate(cli_args):
+        if arg == "--load-settings" and i + 1 < len(cli_args):
+            settings_value = cli_args[i + 1]
+            break
+    if not settings_value:
+        return None
+    paths = [p for p in settings_value.split(";") if p]
+    if not paths:
+        return None
+    process_path = Path(paths[-1])
+    try:
+        with open(process_path, "r", encoding="utf-8") as f:
+            resolved = json.load(f)
+    except (OSError, json.JSONDecodeError):
+        return None
+    if not isinstance(resolved, dict):
+        return None
+
+    value = resolved.get("post_process")
+    if isinstance(value, str):
+        return value or None
+    if isinstance(value, list):
+        # Native's own on-disk representation is a coStrings list (see
+        # PrintConfig.cpp/Config.hpp's ConfigOptionStrings) — join with
+        # ';', the same separator _parse_post_process_scripts already
+        # accepts, so either representation resolves identically.
+        joined = ";".join(str(v) for v in value if str(v).strip())
+        return joined or None
+    return None
+
+
+def _parse_post_process_scripts(value: str) -> list[str]:
+    """
+    Split a `post_process` parameter override value into individual script
+    invocations (each may itself be a full command line, e.g.
+    "/path/to/script.sh --flag").
+
+    Native OrcaSlicer's own config option tooltip
+    (PrintConfig.cpp: def->tooltip for "post_process") documents ';' as the
+    separator for multiple scripts, but the option's actual runtime
+    representation (a coStrings list, gui_flags="serialized", multiline
+    textarea) is split on newlines by PostProcessor.cpp's
+    run_post_process_scripts (`boost::split(lines, scripts,
+    boost::is_any_of("\\r\\n"))`). This app's own parameter UI renders
+    `post_process` as a single-line text field (see ParameterField.tsx —
+    it's typed as `string` there, not a list), so split on BOTH
+    separators here rather than picking just one, so either convention the
+    user types works.
+    """
+    entries = re.split(r'[;\r\n]+', value)
+    return [entry.strip() for entry in entries if entry.strip()]
+
+
+async def _run_post_process_script(script_command: str, gcode_path: Path) -> tuple[int, str]:
+    """
+    Run one post-processing script against a gcode file, mirroring native
+    OrcaSlicer's own script invocation (PostProcessor.cpp's run_script on
+    POSIX): execute through the user's default shell (or /bin/sh) so
+    script_command may itself be a full command line (e.g. a script path
+    plus its own flags), with gcode_path appended as a single,
+    shell-quoted extra argument — exactly matching native's own
+    single-quote escaping of the gcode path before invocation. This is
+    also why addMD5.sh's own `$1` argument works unmodified: native's
+    contract is "scripts will be passed the absolute path to the G-code
+    file as the first argument" (see PrintConfig.cpp's post_process
+    tooltip), which this replicates.
+
+    Returns (exit_code, combined_stdout_stderr).
+    """
+    shell = os.environ.get("SHELL") or "/bin/sh"
+    quoted_gcode = "'" + str(gcode_path).replace("'", "'\\''") + "'"
+    full_command = f"{script_command} {quoted_gcode}"
+
+    process = await asyncio.create_subprocess_exec(
+        shell, "-c", full_command,
+        stdout=asyncio.subprocess.PIPE,
+        stderr=asyncio.subprocess.STDOUT,
+    )
+    stdout, _ = await process.communicate()
+    return process.returncode, stdout.decode("utf-8", errors="replace")
+
+
 def _build_subprocess_env(orca_cli_path: Path) -> dict[str, str]:
     """
     Build the environment for the OrcaSlicer CLI subprocess.
@@ -758,7 +1029,48 @@ class JobManager:
                 if exit_code == 0:
                     status = "completed"
                     error_message = None
-                    
+
+                    # Rename output gcode(s) per filename_format BEFORE
+                    # running post-processing scripts below, matching
+                    # native's own pipeline order (PrintBase::output_filename
+                    # resolves the final path before
+                    # run_post_process_scripts ever executes — see
+                    # PostProcessor.cpp) — so a script like addMD5.sh sees
+                    # the file already under its correctly-named path,
+                    # exactly as it would on native.
+                    await self._apply_filename_format(job_id, cli_args, Path(output_dir))
+
+                    # Run any configured post-processing script(s) against
+                    # every gcode this job produced. Native OrcaSlicer's
+                    # desktop GUI does this itself (BackgroundSlicingProcess.cpp
+                    # calling run_post_process_scripts after export), but the
+                    # headless CLI binary this app invokes has that call
+                    # commented out (OrcaSlicer.cpp's --slice path) — the
+                    # `post_process` config option is accepted and echoed by
+                    # the CLI but silently never executed. This replicates it
+                    # here instead, same pattern as _splice_thumbnail_into_gcode
+                    # in routers/jobs.py working around the CLI's other
+                    # GUI-only thumbnail-callback gap.
+                    # Prefer a live, unsaved Process-panel edit (CLI flag)
+                    # over the resolved settings file — matches
+                    # cli_builder.py's own precedence (parameter_overrides
+                    # always reflects the CURRENT in-memory value, which
+                    # is authoritative over whatever the profile file on
+                    # disk says, e.g. mid-edit before the user has saved).
+                    # Only fall back to the settings file when there's no
+                    # live override at all, i.e. the value was saved into
+                    # the profile itself (see
+                    # _extract_post_process_from_settings_file's doc
+                    # comment for why the CLI flag alone isn't enough).
+                    post_process_value = (
+                        _extract_cli_flag_value(cli_args, "post-process")
+                        or _extract_post_process_from_settings_file(cli_args)
+                    )
+                    if post_process_value:
+                        await self._run_post_process_scripts(
+                            job_id, Path(output_dir), post_process_value
+                        )
+
                     # Scan output directory for files and create output_files records
                     await self._register_output_files(job_id, Path(output_dir))
                     
@@ -851,6 +1163,146 @@ class JobManager:
                     )
                     await db.commit()
     
+    async def _run_post_process_scripts(
+        self, job_id: str, output_dir: Path, post_process_value: str
+    ) -> None:
+        """
+        Run every configured post-processing script (see
+        _parse_post_process_scripts) against every `.gcode` file this job
+        produced, in order, matching native's own "run every configured
+        script, in order, against the same file" semantics
+        (PostProcessor.cpp's run_post_process_scripts loop). Scripts are
+        expected to modify the gcode file IN PLACE (exactly like
+        scripts/addMD5.sh does) — this app does not implement native's
+        optional "script renames the output file" mechanism
+        (path_output_name / SLIC3R_PP_OUTPUT_NAME in PostProcessor.cpp),
+        since nothing in this app's own job pipeline currently needs it.
+
+        A script that exits non-zero, or is missing/non-executable, logs a
+        warning and is skipped rather than failing the whole (already
+        exit-code-0-completed) job — the slice itself succeeded; a broken
+        post-processing script shouldn't retroactively turn a completed
+        job into a failed one, it should just leave the gcode
+        un-post-processed. This mirrors _register_output_files/
+        _splice_thumbnail_into_gcode's own philosophy of "best-effort,
+        log and continue" for CLI-gap workarounds.
+        """
+        scripts = _parse_post_process_scripts(post_process_value)
+        if not scripts:
+            return
+
+        gcode_paths = sorted(output_dir.glob("*.gcode"))
+        if not gcode_paths:
+            logger.warning(
+                f"Job {job_id}: post_process configured but no .gcode files found in {output_dir}"
+            )
+            return
+
+        for gcode_path in gcode_paths:
+            for script in scripts:
+                try:
+                    exit_code, output = await _run_post_process_script(script, gcode_path)
+                except Exception as e:
+                    logger.error(
+                        f"Job {job_id}: failed to launch post-processing script "
+                        f"'{script}' on {gcode_path.name}: {e}"
+                    )
+                    continue
+
+                if exit_code != 0:
+                    logger.warning(
+                        f"Job {job_id}: post-processing script '{script}' on "
+                        f"{gcode_path.name} exited with code {exit_code}. Output: {output.strip()}"
+                    )
+                else:
+                    logger.info(
+                        f"Job {job_id}: post-processing script '{script}' ran "
+                        f"successfully on {gcode_path.name}"
+                    )
+
+    async def _apply_filename_format(self, job_id: str, cli_args: list[str], output_dir: Path) -> None:
+        """
+        Rename every `.gcode` this job produced according to
+        `filename_format` (a `--filename-format=...` value in cli_args if
+        the user overrode it, else PrintConfig.cpp's own documented
+        default — see DEFAULT_FILENAME_FORMAT), matching what native
+        OrcaSlicer's `PrintBase::output_filename` would have named the
+        file.
+
+        This exists because the CLI never actually calls
+        `output_filename` for `--slice`'s plate exports (`OrcaSlicer.cpp`
+        hardcodes `outfile_dir + "/plate_" + N + ".gcode"` — see
+        that file's --slice handler) — `filename_format`'s configured
+        value is accepted and merely echoed into the gcode's own
+        CONFIG_BLOCK footer dump, never applied to the actual output
+        path. Same category of CLI-only gap as post_process/thumbnails
+        elsewhere in this module/routers/jobs.py.
+
+        The three placeholders this substitutes are resolved from
+        values the CLI itself already wrote into each gcode file's own
+        footer (input file's basename, filament_type, and the
+        "estimated printing time (normal mode)" line) — reading them
+        back out of the gcode is simpler and more accurate than trying
+        to recompute filament_type/print_time independently in Python,
+        and guarantees the values exactly match what native itself
+        would have used for that same file's placeholders.
+        """
+        filename_format = _extract_cli_flag_value(cli_args, "filename-format") or DEFAULT_FILENAME_FORMAT
+        if "{" not in filename_format:
+            # No placeholders at all — nothing to substitute, and
+            # (matching native) every plate would collide on the same
+            # literal name, so skip renaming entirely rather than
+            # silently overwriting one plate's output with another's.
+            return
+
+        input_paths = _extract_input_file_paths(cli_args)
+        input_filename_base = Path(input_paths[0]).stem if input_paths else "output"
+
+        for gcode_path in sorted(output_dir.glob("*.gcode")):
+            try:
+                gcode_text = gcode_path.read_text(encoding="utf-8", errors="replace")
+            except OSError as e:
+                logger.warning(f"Job {job_id}: could not read {gcode_path.name} for filename_format: {e}")
+                continue
+
+            filament_type = _extract_gcode_config_value(gcode_text, "filament_type") or ""
+            print_time_dhms = _extract_gcode_config_value(
+                gcode_text, "estimated printing time (normal mode)"
+            ) or ""
+            print_time = _short_time(print_time_dhms) if print_time_dhms else ""
+
+            new_name = _substitute_filename_format(
+                filename_format, input_filename_base, filament_type, print_time
+            )
+            # Sanitize: strip any path separators a malformed/malicious
+            # filename_format override could smuggle in — the result
+            # must stay a bare filename inside output_dir, never escape
+            # it (mirrors resolve_and_guard's intent elsewhere in this
+            # codebase, applied here since Path(new_name) below doesn't
+            # itself validate containment).
+            new_name = new_name.replace("/", "_").replace("\\", "_")
+            if not new_name:
+                continue
+
+            new_path = output_dir / new_name
+            if new_path == gcode_path:
+                continue
+            if new_path.exists():
+                # Two plates resolved to the same name (e.g. filament_type
+                # placeholder absent from a malformed override) — don't
+                # clobber an already-renamed sibling output.
+                logger.warning(
+                    f"Job {job_id}: filename_format collision, keeping "
+                    f"{gcode_path.name} (target {new_name} already exists)"
+                )
+                continue
+
+            try:
+                gcode_path.rename(new_path)
+                logger.info(f"Job {job_id}: renamed {gcode_path.name} -> {new_name} per filename_format")
+            except OSError as e:
+                logger.warning(f"Job {job_id}: failed to rename {gcode_path.name} to {new_name}: {e}")
+
     async def _register_output_files(self, job_id: str, output_dir: Path) -> None:
         """
         Scan output directory and create output_files database records.

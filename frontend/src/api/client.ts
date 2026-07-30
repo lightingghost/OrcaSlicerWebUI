@@ -20,13 +20,30 @@ export interface UploadedFile {
 
 export interface ProfileEntry {
   name: string;
+  /** Absolute filesystem path — for a system profile, a real file under
+   *  resources/profiles/; for a user-saved config (is_user=true), a real
+   *  file under USER_WORKSPACE/{printer,filament,process}/. This is the
+   *  single identifier sent as e.g. JobRequest.printer_profile_path —
+   *  there is no "user:name" string-prefix convention anymore, use
+   *  `is_user` to tell the two apart. */
   path: string;
   category: "machine" | "process" | "filament";
+  /** Manufacturer directory name (e.g. "Flashforge") for system profiles;
+   *  undefined for user-saved configs. */
+  manufacturer?: string;
+  /** Path relative to resources/profiles/{manufacturer}/{category}/ (may
+   *  include subdirectories); undefined for user-saved configs. */
+  filename?: string;
+  /** True for a user-saved config (see PrinterConfigEntry), false/undefined
+   *  for a system (bundled) profile. */
+  is_user?: boolean;
 }
 
 export interface FilamentProfileInfo {
   name: string;
   path: string;
+  manufacturer: string;
+  filename: string;
   material_type: string;
   compatible_printers: string[];
 }
@@ -39,16 +56,35 @@ export interface FilamentMetadata {
 
 export interface PrinterConfigEntry {
   name: string;
+  /** Absolute filesystem path to the saved config's JSON file under
+   *  USER_WORKSPACE/{printer,filament,process}/ — see ProfileEntry.path's
+   *  doc comment; this is the same kind of identifier, just always
+   *  user-saved. */
   path: string;
+  category: "machine" | "process" | "filament";
+  is_user: boolean;
   autosave: boolean;
+  /** The saved config's own `inherits` field (the system profile name it
+   *  was based on) — used e.g. to filter process configs by printer
+   *  compatibility, since a saved config has no `compatible_printers` of
+   *  its own. Null if absent/unreadable. */
+  inherits?: string | null;
 }
 
 export interface UserConfig {
   selected_manufacturer?: string | null;
   selected_printer_profile_path?: string | null;
+  /** True if selected_printer_profile_path is a user-saved config rather
+   *  than a system profile — see ProfileEntry.is_user's doc comment. */
+  selected_printer_is_user?: boolean;
   selected_bed_type?: string | null;
   selected_process_profile_path?: string | null;
+  /** True if selected_process_profile_path is a user-saved config. */
+  selected_process_is_user?: boolean;
   selected_filament_profile_paths?: string[];
+  /** Parallel to selected_filament_profile_paths; true at index i if
+   *  that filament path is a user-saved config. */
+  selected_filament_is_user?: boolean[];
   /** Pending (unsaved) edits from the Printer settings dialog, mirroring
    *  USER_WORKSPACE/autosave/printer_config.json. Null if no pending edits. */
   printer_config_autosave?: Record<string, unknown> | null;
@@ -627,6 +663,14 @@ class ApiClient {
     });
   }
 
+  async deleteFilamentConfig(name: string, autosave = false): Promise<{ message: string }> {
+    const params = new URLSearchParams({ autosave: String(autosave) });
+    return this.request<{ message: string }>(
+      `/api/filament-configs/${encodeURIComponent(name)}?${params}`,
+      { method: "DELETE" }
+    );
+  }
+
   // ============================================================================
   // Process Config Endpoints  →  USER_WORKSPACE/process/
   // ============================================================================
@@ -649,6 +693,14 @@ class ApiClient {
       method: "POST",
       body: JSON.stringify({ name, config, autosave }),
     });
+  }
+
+  async deleteProcessConfig(name: string, autosave = false): Promise<{ message: string }> {
+    const params = new URLSearchParams({ autosave: String(autosave) });
+    return this.request<{ message: string }>(
+      `/api/process-configs/${encodeURIComponent(name)}?${params}`,
+      { method: "DELETE" }
+    );
   }
 
   // ============================================================================

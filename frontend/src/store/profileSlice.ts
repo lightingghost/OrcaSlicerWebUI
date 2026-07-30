@@ -55,8 +55,19 @@ function coerceProfileValue(
 
 export interface ProfileEntry {
   name: string;
-  path: string; // relative to resources/profiles/
+  /** Absolute filesystem path — identifies both system profiles and
+   *  user-saved configs uniformly (see api/client.ts's ProfileEntry doc
+   *  comment). No "user:name" string-prefix convention — use `is_user`. */
+  path: string;
   category: 'machine' | 'process' | 'filament';
+  /** Manufacturer directory name for system profiles; undefined for
+   *  user-saved configs. */
+  manufacturer?: string;
+  /** Path relative to resources/profiles/{manufacturer}/{category}/;
+   *  undefined for user-saved configs. */
+  filename?: string;
+  /** True for a user-saved config, false/undefined for a system profile. */
+  is_user?: boolean;
 }
 
 export interface ProfileSlice {
@@ -105,6 +116,29 @@ export interface ProfileSlice {
   selectBedType: (bedType: string) => void;
   selectProcessProfile: (profile: ProfileEntry, preserveAutosave?: boolean) => Promise<void>;
   toggleFilamentProfile: (profile: ProfileEntry) => void;
+  /** Clears the current printer selection (e.g. after the user-saved
+   *  config it pointed at was deleted), so the app doesn't keep
+   *  referencing a config that no longer exists on disk. */
+  clearSelectedPrinterProfile: () => void;
+  /** Clears the current process selection for the same reason as
+   *  clearSelectedPrinterProfile. Also resets in-memory overrides
+   *  (except curr_bed_type) and profileDefaults, matching what
+   *  selectProcessProfile does when loading a new profile — there is no
+   *  longer a profile backing the current parameter state. */
+  clearSelectedProcessProfile: () => void;
+  /** Removes one user-saved filament config from the selection (e.g.
+   *  after it was deleted) — a thin wrapper over toggleFilamentProfile
+   *  for callers that only have the config's path, not the full
+   *  ProfileEntry object currently selected. */
+  removeSelectedFilamentProfileByPath: (path: string) => void;
+  /** Replaces the filament at a specific slot (index into
+   *  selectedFilamentProfiles) with a different profile — used after
+   *  saving a filament config from FilamentConfigDialog, so the newly
+   *  saved config becomes the one loaded in that slot. Unlike
+   *  toggleFilamentProfile (which adds/removes by matching path), this
+   *  targets a slot by position since the dialog only knows the index
+   *  it was opened for, not necessarily the profile that ends up there. */
+  replaceSelectedFilamentProfileAt: (index: number, profile: ProfileEntry) => void;
   loadUserConfig: () => Promise<void>;
   /** Fetch process profiles compatible with the given canonical printer name
    *  in a single backend request, replacing the old per-profile serial loop. */
@@ -304,11 +338,11 @@ export const createProfileSlice: StateCreator<
   },
 
   selectPrinterProfile: async (profile: ProfileEntry, preserveAutosave = false) => {
-    // Extract manufacturer from profile path (e.g., "Flashforge/machine/..." -> "Flashforge")
-    // For user configs (path starts with "user:"), don't overwrite the manufacturer —
-    // it was already set correctly when the user first selected the system profile.
-    const isUserConfig = profile.path.startsWith('user:');
-    const manufacturer = isUserConfig ? get().selectedManufacturer : profile.path.split('/')[0];
+    // For user configs, don't overwrite the manufacturer — it was
+    // already set correctly when the user first selected the system
+    // profile the config is based on.
+    const isUserConfig = profile.is_user === true;
+    const manufacturer = isUserConfig ? get().selectedManufacturer : profile.manufacturer ?? get().selectedManufacturer;
     
     set({ 
       selectedPrinterProfile: profile,
@@ -334,9 +368,8 @@ export const createProfileSlice: StateCreator<
       if (isUserConfig) {
         // User config: load the saved JSON to find its `inherits` field,
         // then resolve that parent profile to get printer_variant and bed size.
-        const configName = profile.path.slice('user:'.length);
         const userResp = await fetch(
-          `/api/printer-configs/${encodeURIComponent(configName)}`,
+          `/api/printer-configs/${encodeURIComponent(profile.name)}`,
           { headers: authHeader }
         );
         if (userResp.ok) {
@@ -351,9 +384,9 @@ export const createProfileSlice: StateCreator<
             // Find the parent profile path by searching loaded profiles
             const { printerProfiles } = get();
             const parentProfile = printerProfiles.find(p => p.name === inheritsName);
-            if (parentProfile) {
+            if (parentProfile && parentProfile.manufacturer && parentProfile.filename) {
               const parentResp = await fetch(
-                `/api/profiles/${parentProfile.path}/resolved`,
+                `/api/profiles/${parentProfile.manufacturer}/${parentProfile.category}/${encodeURIComponent(parentProfile.filename)}/resolved`,
                 { headers: authHeader }
               );
               if (parentResp.ok) resolvedData = await parentResp.json();
@@ -366,10 +399,10 @@ export const createProfileSlice: StateCreator<
             resolvedData = userConfig;
           }
         }
-      } else {
+      } else if (profile.manufacturer && profile.filename) {
         // Standard system profile: use the resolved endpoint directly
         const resp = await fetch(
-          `/api/profiles/${profile.path}/resolved`,
+          `/api/profiles/${profile.manufacturer}/${profile.category}/${encodeURIComponent(profile.filename)}/resolved`,
           { headers: authHeader }
         );
         if (resp.ok) resolvedData = await resp.json();
@@ -447,9 +480,27 @@ export const createProfileSlice: StateCreator<
   selectProcessProfile: async (profile: ProfileEntry, preserveAutosave = false) => {
     set({ selectedProcessProfile: profile });
 
-    // Only clear the process autosave on a manual selection change.
+    // Only clear the process autosave + in-memory overrides on a manual
+    // load (whether switching to a different config or reloading the
+    // same one) — page-load restore (preserveAutosave=true) must NOT do
+    // this, since it needs to keep whatever pending edits were autosaved
+    // for this exact profile (see the `preserveAutosave` branch below).
     if (!preserveAutosave) {
       get().clearConfigAutosave('process').catch(() => {});
+      // Discard any leftover in-memory overrides from whatever was
+      // previously loaded, so they don't get misattributed as edits on
+      // top of the config just (re)loaded — its own values (about to be
+      // fetched and set as profileDefaults below) become the new, sole
+      // baseline. Without this, a value edited against the PREVIOUS
+      // profile would linger in `overrides`, and the next autosave write
+      // (see ConfigAutoSave.tsx's effect #3) would re-stamp its
+      // `_inherits` pointer to the newly loaded profile despite actually
+      // carrying stale values from the old one — exactly the "pointer"
+      // that must reset to the config now being loaded, not the one it
+      // replaced. `curr_bed_type` is preserved since it's driven by the
+      // physical bed-plate selector, not by which process profile is
+      // loaded.
+      get().clearAllOverrides(['curr_bed_type']);
     }
 
     // Fetch the process profile's fully resolved configuration and populate
@@ -459,10 +510,9 @@ export const createProfileSlice: StateCreator<
       const authHeader = { Authorization: `Bearer ${localStorage.getItem('api_token') || ''}` };
       let resolvedConfig: Record<string, unknown>;
 
-      if (profile.path.startsWith('user:')) {
-        const configName = profile.path.slice('user:'.length);
+      if (profile.is_user) {
         const userConfig: Record<string, unknown> = await fetch(
-          `/api/process-configs/${encodeURIComponent(configName)}`,
+          `/api/process-configs/${encodeURIComponent(profile.name)}`,
           { headers: authHeader }
         ).then(r => r.json());
 
@@ -470,15 +520,14 @@ export const createProfileSlice: StateCreator<
         let base: Record<string, unknown> = {};
 
         if (inherits) {
-          const allProfiles: Array<{ name: string; path: string }> = await fetch(
+          const allProfiles: ProfileEntry[] = await fetch(
             '/api/profiles', { headers: authHeader }
           ).then(r => r.json());
 
-          const parent = allProfiles.find(p => p.name === inherits && p.path.includes('/process/'));
-          if (parent) {
-            const pts = parent.path.split('/');
+          const parent = allProfiles.find(p => p.name === inherits && p.category === 'process');
+          if (parent && parent.manufacturer && parent.filename) {
             const resp = await fetch(
-              `/api/profiles/${pts[0]}/${pts[1]}/${encodeURIComponent(pts.slice(2).join('/'))}/resolved`,
+              `/api/profiles/${parent.manufacturer}/${parent.category}/${encodeURIComponent(parent.filename)}/resolved`,
               { headers: authHeader }
             );
             if (resp.ok) base = await resp.json();
@@ -486,12 +535,15 @@ export const createProfileSlice: StateCreator<
         }
 
         resolvedConfig = { ...base, ...userConfig };
+      } else if (profile.manufacturer && profile.filename) {
+        const resp = await fetch(
+          `/api/profiles/${profile.manufacturer}/${profile.category}/${encodeURIComponent(profile.filename)}/resolved`,
+          { headers: authHeader }
+        );
+        if (!resp.ok) throw new Error(`Failed to fetch resolved process profile: ${resp.status}`);
+        resolvedConfig = await resp.json();
       } else {
-        const response = await fetch(`/api/profiles/${profile.path}/resolved`, {
-          headers: authHeader,
-        });
-        if (!response.ok) throw new Error(`Failed to fetch resolved process profile: ${response.status}`);
-        resolvedConfig = await response.json();
+        resolvedConfig = {};
       }
 
       const { parameterDescriptors, setProfileDefaults } = get();
@@ -554,6 +606,51 @@ export const createProfileSlice: StateCreator<
     });
   },
 
+  clearSelectedPrinterProfile: () => {
+    set({
+      selectedPrinterProfile: null,
+      bedSize: null,
+      bedCenter: null,
+      printerVariant: null,
+      printerSystemName: null,
+    });
+    get().clearConfigAutosave('printer').catch(() => {});
+  },
+
+  clearSelectedProcessProfile: () => {
+    set({ selectedProcessProfile: null });
+    get().clearConfigAutosave('process').catch(() => {});
+    // No profile backs the current parameter state anymore — clear both
+    // the resolved-profile baseline and any leftover overrides (except
+    // curr_bed_type, which is independent of the process profile), same
+    // reasoning as selectProcessProfile's own manual-load reset.
+    get().clearProfileDefaults();
+    get().clearAllOverrides(['curr_bed_type']);
+  },
+
+  removeSelectedFilamentProfileByPath: (path: string) => {
+    const profile = get().selectedFilamentProfiles.find((p) => p.path === path);
+    if (profile) {
+      get().toggleFilamentProfile(profile);
+    }
+  },
+
+  replaceSelectedFilamentProfileAt: (index: number, profile: ProfileEntry) => {
+    set((state) => {
+      if (index < 0 || index >= state.selectedFilamentProfiles.length) {
+        return {};
+      }
+      const next = [...state.selectedFilamentProfiles];
+      next[index] = profile;
+      return { selectedFilamentProfiles: next };
+    });
+    // The slot now points at a newly saved config with no pending edits
+    // of its own — clear its autosave so a stale diff from the config it
+    // replaced doesn't linger and get misattributed to the new one (same
+    // reasoning as selectProcessProfile's manual-load reset).
+    get().clearConfigAutosave('filament', index).catch(() => {});
+  },
+
   loadUserConfig: async () => {
     try {
       const config = await apiClient.getUserConfig();
@@ -561,42 +658,16 @@ export const createProfileSlice: StateCreator<
       // Build state update object
       const stateUpdate: Partial<ProfileSlice> = {};
 
-      // Determine the real manufacturer name to use for fetching system profiles.
-      // Saved configs may have a corrupted selected_manufacturer (e.g. "user:...")
-      // if a user printer config was selected — derive from the printer path instead.
-      let manufacturerName = config.selected_manufacturer;
+      // Determine the real manufacturer name to use for fetching system
+      // profiles. `selected_is_user_printer` (persisted alongside the
+      // path — see saveUserConfig) tells us whether the saved printer
+      // selection was a user config, in which case selected_manufacturer
+      // still holds the real manufacturer name (derived from the
+      // config's `inherits` chain when it was originally selected — see
+      // selectPrinterProfile), so no extra lookup is needed here at all.
+      const manufacturerName = config.selected_manufacturer;
 
-      const printerPath = config.selected_printer_profile_path;
-      if (printerPath && !printerPath.startsWith('user:')) {
-        // System printer: manufacturer is the first path segment
-        manufacturerName = printerPath.split('/')[0];
-      } else if (printerPath && printerPath.startsWith('user:')) {
-        // User printer: fetch its JSON to find inherits, extract manufacturer
-        // from the parent's path. We do this by fetching all manufacturers and
-        // looking up the parent profile.
-        if (!manufacturerName || manufacturerName.startsWith('user:')) {
-          try {
-            const configName = printerPath.slice('user:'.length);
-            const authHeader = { Authorization: `Bearer ${localStorage.getItem('api_token') || ''}` };
-            const userResp = await fetch(`/api/printer-configs/${encodeURIComponent(configName)}`, { headers: authHeader });
-            if (userResp.ok) {
-              const userCfg = await userResp.json();
-              const inherits = userCfg.inherits as string | undefined;
-              if (inherits) {
-                // Find the manufacturer by scanning all profiles for the inherits name
-                const allResp = await fetch('/api/profiles', { headers: authHeader });
-                if (allResp.ok) {
-                  const allProfiles: ProfileEntry[] = await allResp.json();
-                  const parent = allProfiles.find(p => p.name === inherits && p.category === 'machine');
-                  if (parent) manufacturerName = parent.path.split('/')[0];
-                }
-              }
-            }
-          } catch { /* keep existing manufacturerName if this fails */ }
-        }
-      }
-
-      if (!manufacturerName || manufacturerName.startsWith('user:')) {
+      if (!manufacturerName) {
         // Nothing useful to load
         return;
       }
@@ -617,14 +688,16 @@ export const createProfileSlice: StateCreator<
             stateUpdate.processProfiles = profiles.filter((p) => p.category === 'process');
             stateUpdate.filamentProfiles = profiles.filter((p) => p.category === 'filament');
             
-            // Restore printer profile — handles both system paths and "user:..." paths
+            // Restore printer profile — a user-saved config's ProfileEntry
+            // is synthesised from just its (name, path); the real content
+            // gets fetched by selectPrinterProfile below via profile.is_user.
             if (config.selected_printer_profile_path) {
               const path = config.selected_printer_profile_path;
               let printerProfile: ProfileEntry | undefined;
 
-              if (path.startsWith('user:')) {
-                const name = path.slice('user:'.length);
-                printerProfile = { name, path, category: 'machine' };
+              if (config.selected_printer_is_user) {
+                const name = path.split('/').pop()?.replace(/\.json$/, '') ?? path;
+                printerProfile = { name, path, category: 'machine', is_user: true };
               } else {
                 printerProfile = stateUpdate.printerProfiles?.find(p => p.path === path);
               }
@@ -634,14 +707,14 @@ export const createProfileSlice: StateCreator<
               }
             }
             
-            // Restore process profile — handles both system paths and "user:..." paths
+            // Restore process profile — same pattern as printer above.
             if (config.selected_process_profile_path) {
               const path = config.selected_process_profile_path;
               let processProfile: ProfileEntry | undefined;
 
-              if (path.startsWith('user:')) {
-                const name = path.slice('user:'.length);
-                processProfile = { name, path, category: 'process' };
+              if (config.selected_process_is_user) {
+                const name = path.split('/').pop()?.replace(/\.json$/, '') ?? path;
+                processProfile = { name, path, category: 'process', is_user: true };
               } else {
                 processProfile = stateUpdate.processProfiles?.find(p => p.path === path);
               }
@@ -651,13 +724,14 @@ export const createProfileSlice: StateCreator<
               }
             }
             
-            // Restore filament profiles — handles both system paths and "user:..." paths
+            // Restore filament profiles — same pattern, index-aligned
+            // with selected_filament_is_user.
             if (config.selected_filament_profile_paths && config.selected_filament_profile_paths.length > 0) {
-              const filamentProfiles = config.selected_filament_profile_paths.map(path => {
-                if (path.startsWith('user:')) {
-                  // User-saved filament: synthesise a ProfileEntry from the name
-                  const name = path.slice('user:'.length);
-                  return { name, path, category: 'filament' } as ProfileEntry;
+              const isUserFlags = config.selected_filament_is_user ?? [];
+              const filamentProfiles = config.selected_filament_profile_paths.map((path, idx) => {
+                if (isUserFlags[idx]) {
+                  const name = path.split('/').pop()?.replace(/\.json$/, '') ?? path;
+                  return { name, path, category: 'filament', is_user: true } as ProfileEntry;
                 }
                 return stateUpdate.filamentProfiles?.find(p => p.path === path);
               }).filter((p): p is ProfileEntry => p !== undefined);
@@ -710,13 +784,13 @@ export const createProfileSlice: StateCreator<
     const state = get();
     
     try {
-      // For the manufacturer, always derive it from the printer profile path
-      // rather than selectedManufacturer, which may be "user:..." for user configs.
-      let manufacturer = state.selectedManufacturer;
-      const printerPath = state.selectedPrinterProfile?.path;
-      if (printerPath && !printerPath.startsWith('user:')) {
-        manufacturer = printerPath.split('/')[0];
-      }
+      // For the manufacturer, prefer the selected printer's own
+      // manufacturer field when it's a system profile; a user-saved
+      // printer config has no manufacturer of its own, so keep whatever
+      // selectedManufacturer already tracks (set when the user first
+      // picked the system profile the config is based on — see
+      // selectPrinterProfile).
+      const manufacturer = state.selectedPrinterProfile?.manufacturer ?? state.selectedManufacturer;
 
       // Pull in any pending (unsaved) dialog/parameter-panel edits so the
       // persisted yaml carries the actual in-progress config, not just a
@@ -735,9 +809,12 @@ export const createProfileSlice: StateCreator<
       const config = {
         selected_manufacturer: manufacturer,
         selected_printer_profile_path: state.selectedPrinterProfile?.path || null,
+        selected_printer_is_user: state.selectedPrinterProfile?.is_user === true,
         selected_bed_type: state.selectedBedType,
         selected_process_profile_path: state.selectedProcessProfile?.path || null,
+        selected_process_is_user: state.selectedProcessProfile?.is_user === true,
         selected_filament_profile_paths: state.selectedFilamentProfiles.map(p => p.path),
+        selected_filament_is_user: state.selectedFilamentProfiles.map(p => p.is_user === true),
         printer_config_autosave: printerAutosave,
         process_config_autosave: processAutosave,
         filament_config_autosaves: filamentAutosaves,

@@ -12,8 +12,8 @@
 
 import { useEffect, useState, useMemo } from 'react';
 import { useStore } from '../../store';
-import { ChevronDown } from 'lucide-react';
-import type { PrinterConfigEntry } from '../../api/client';
+import { ChevronDown, Trash2 } from 'lucide-react';
+import { apiClient, type PrinterConfigEntry } from '../../api/client';
 
 /**
  * Extract base model name and nozzle size from printer profile name
@@ -36,10 +36,12 @@ interface PrinterPickerModalProps {
   isOpen: boolean;
   onClose: () => void;
   manufacturers: string[];
-  printerProfiles: Array<{ name: string; path: string; category: string }>;
+  printerProfiles: Array<{ name: string; path: string; category: string; manufacturer?: string }>;
   userPrinterConfigs: PrinterConfigEntry[];
   selectedPath: string | null;
+  selectedManufacturer: string | null;
   onSelect: (profile: any) => void;
+  onDeleteUserConfig: (cfg: PrinterConfigEntry) => void;
 }
 
 const PrinterPickerModal: React.FC<PrinterPickerModalProps> = ({
@@ -49,18 +51,14 @@ const PrinterPickerModal: React.FC<PrinterPickerModalProps> = ({
   printerProfiles,
   userPrinterConfigs,
   selectedPath,
+  selectedManufacturer,
   onSelect,
+  onDeleteUserConfig,
 }) => {
   // Initialize filter based on currently selected printer's manufacturer
   const initialManufacturer = useMemo(() => {
-    if (selectedPath) {
-      const manufacturerMatch = selectedPath.match(/^([^/]+)\//);
-      if (manufacturerMatch) {
-        return manufacturerMatch[1];
-      }
-    }
-    return 'all';
-  }, [selectedPath, isOpen]); // Re-compute when modal opens
+    return selectedManufacturer ?? 'all';
+  }, [selectedManufacturer, isOpen]); // Re-compute when modal opens
 
   const [filterManufacturer, setFilterManufacturer] = useState<string>(initialManufacturer);
 
@@ -76,9 +74,7 @@ const PrinterPickerModal: React.FC<PrinterPickerModalProps> = ({
   // Filter printers by manufacturer (case-insensitive)
   const filteredPrinters = printerProfiles.filter(profile => {
     if (filterManufacturer === 'all') return true;
-    // Extract manufacturer from path (e.g., "Flashforge/machine/..." -> "Flashforge")
-    const profileManufacturer = profile.path.split('/')[0];
-    return profileManufacturer.toLowerCase() === filterManufacturer.toLowerCase();
+    return (profile.manufacturer ?? '').toLowerCase() === filterManufacturer.toLowerCase();
   });
 
   return (
@@ -165,27 +161,40 @@ const PrinterPickerModal: React.FC<PrinterPickerModalProps> = ({
               {userPrinterConfigs
                 .filter(c => !c.autosave)
                 .map(cfg => {
-                  const isSelected = selectedPath === `user:${cfg.path}`;
+                  const isSelected = selectedPath === cfg.path;
                   return (
-                    <button
+                    <div
                       key={cfg.path}
-                      onClick={() => {
-                        onSelect({ name: cfg.name, path: `user:${cfg.path}`, category: 'machine', isUserConfig: true });
-                        onClose();
-                      }}
-                      className={`w-full p-3 rounded text-left transition-colors ${
+                      className={`w-full flex items-center gap-2 p-3 rounded transition-colors ${
                         isSelected
                           ? 'bg-purple-600 text-white'
                           : 'bg-gray-700/80 text-gray-200 hover:bg-gray-600 border border-dashed border-gray-600'
                       }`}
                     >
-                      <div className="flex items-center justify-between">
+                      <button
+                        onClick={() => {
+                          onSelect({ name: cfg.name, path: cfg.path, category: 'machine', is_user: true });
+                          onClose();
+                        }}
+                        className="flex-1 min-w-0 flex items-center justify-between text-left"
+                      >
                         <span className="text-sm font-medium truncate">{cfg.name}</span>
                         <span className="text-xs bg-teal-700 text-teal-100 px-2 py-0.5 rounded ml-2 flex-shrink-0">
                           user
                         </span>
-                      </div>
-                    </button>
+                      </button>
+                      <button
+                        onClick={(e) => {
+                          e.stopPropagation();
+                          onDeleteUserConfig(cfg);
+                        }}
+                        title={`Delete "${cfg.name}"`}
+                        aria-label={`Delete ${cfg.name}`}
+                        className="flex-shrink-0 p-1 rounded text-gray-400 hover:text-red-400 hover:bg-gray-800/60 transition-colors"
+                      >
+                        <Trash2 className="w-4 h-4" />
+                      </button>
+                    </div>
                   );
                 })}
             </div>
@@ -218,11 +227,32 @@ export const PrinterSelector: React.FC = () => {
     userPrinterConfigs,
     fetchUserPrinterConfigs,
     printerVariant,
+    clearSelectedPrinterProfile,
   } = useStore();
 
   const [isModalOpen, setIsModalOpen] = useState(false);
   const [isLoadingManufacturers, setIsLoadingManufacturers] = useState(false);
   const [error, setError] = useState<string | null>(null);
+
+  const handleDeleteUserConfig = async (cfg: PrinterConfigEntry) => {
+    if (!window.confirm(`Delete saved printer config "${cfg.name}"? This cannot be undone.`)) {
+      return;
+    }
+    try {
+      await apiClient.deletePrinterConfig(cfg.name);
+      await fetchUserPrinterConfigs();
+      // If the deleted config was the one currently selected, clear the
+      // selection so the app doesn't keep pointing at a config that no
+      // longer exists on disk (e.g. a later Slice would 404/422 trying
+      // to resolve it).
+      if (selectedPrinterProfile?.path === cfg.path) {
+        clearSelectedPrinterProfile();
+      }
+    } catch (err) {
+      console.error('Failed to delete printer config:', err);
+      setError(err instanceof Error ? err.message : 'Failed to delete printer config');
+    }
+  };
 
   // Fetch manufacturers on mount
   useEffect(() => {
@@ -249,7 +279,7 @@ export const PrinterSelector: React.FC = () => {
         // Check if we need to load profiles
         // We should have profiles from multiple manufacturers
         const uniqueManufacturers = new Set(
-          printerProfiles.map(p => p.path.split('/')[0])
+          printerProfiles.map(p => p.manufacturer ?? '')
         );
         
         // If we have very few profiles or only one manufacturer, reload all
@@ -406,7 +436,9 @@ export const PrinterSelector: React.FC = () => {
         printerProfiles={printerProfiles}
         userPrinterConfigs={userPrinterConfigs}
         selectedPath={selectedPrinterProfile?.path || null}
+        selectedManufacturer={selectedPrinterProfile?.manufacturer ?? selectedManufacturer}
         onSelect={selectPrinterProfile}
+        onDeleteUserConfig={handleDeleteUserConfig}
       />
     </div>
   );

@@ -60,8 +60,10 @@ const DESCRIPTORS: ParameterDescriptor[] = [
 
 const PROFILE: ProfileEntry = {
   name: '0.20mm Standard @Flashforge AD5M 0.4 Nozzle',
-  path: 'Flashforge/process/0.20mm Standard @Flashforge AD5M 0.4 Nozzle.json',
+  path: '/app/orca-slicer/resources/profiles/Flashforge/process/0.20mm Standard @Flashforge AD5M 0.4 Nozzle.json',
   category: 'process',
+  manufacturer: 'Flashforge',
+  filename: '0.20mm Standard @Flashforge AD5M 0.4 Nozzle.json',
 };
 
 describe('profileSlice - selectProcessProfile', () => {
@@ -93,7 +95,7 @@ describe('profileSlice - selectProcessProfile', () => {
     await store.getState().selectProcessProfile(PROFILE);
 
     expect(global.fetch).toHaveBeenCalledWith(
-      `/api/profiles/${PROFILE.path}/resolved`,
+      `/api/profiles/${PROFILE.manufacturer}/${PROFILE.category}/${encodeURIComponent(PROFILE.filename!)}/resolved`,
       expect.any(Object)
     );
 
@@ -197,5 +199,84 @@ describe('profileSlice - selectProcessProfile', () => {
     await store.getState().selectProcessProfile(PROFILE);
 
     expect(store.getState().profileDefaults.layer_height).toBe(0.2);
+  });
+
+  describe('loading a process config clears stale overrides and the autosave pointer', () => {
+    it('discards leftover in-memory overrides from a previously loaded config on a manual (re)load', async () => {
+      (global.fetch as ReturnType<typeof vi.fn>).mockResolvedValue({
+        ok: true,
+        json: async () => ({ layer_height: '0.2' }),
+      });
+
+      const store = makeStore();
+      store.setState({ parameterDescriptors: DESCRIPTORS });
+
+      // Simulate edits made against whatever was previously loaded —
+      // these must NOT survive loading a (different, or the same
+      // re-saved) process config.
+      store.getState().setOverride('line_width', 0.99);
+      store.getState().setOverride('enable_support', true);
+
+      await store.getState().selectProcessProfile(PROFILE); // preserveAutosave defaults to false
+
+      expect(store.getState().overrides).toEqual({});
+    });
+
+    it('preserves curr_bed_type across a manual load (bed plate selection is independent of the process profile)', async () => {
+      (global.fetch as ReturnType<typeof vi.fn>).mockResolvedValue({
+        ok: true,
+        json: async () => ({ layer_height: '0.2' }),
+      });
+
+      const store = makeStore();
+      store.setState({ parameterDescriptors: DESCRIPTORS });
+      store.getState().setOverride('curr_bed_type', 'Textured Cool Plate');
+      store.getState().setOverride('line_width', 0.99);
+
+      await store.getState().selectProcessProfile(PROFILE);
+
+      expect(store.getState().overrides).toEqual({ curr_bed_type: 'Textured Cool Plate' });
+    });
+
+    it('does NOT clear in-memory overrides when restoring on page load (preserveAutosave=true)', async () => {
+      // Distinguish the resolved-profile fetch from the autosave fetch so
+      // this test isn't polluted by the (separate, pre-existing)
+      // autosave-reapply step that preserveAutosave=true also triggers.
+      (global.fetch as ReturnType<typeof vi.fn>).mockImplementation((url: string) => {
+        if (String(url).includes('/api/autosave/')) {
+          return Promise.resolve({ ok: false, status: 404, json: async () => ({}) });
+        }
+        return Promise.resolve({ ok: true, json: async () => ({ layer_height: '0.2' }) });
+      });
+
+      const store = makeStore();
+      store.setState({ parameterDescriptors: DESCRIPTORS });
+      store.getState().setOverride('line_width', 0.99);
+
+      await store.getState().selectProcessProfile(PROFILE, true);
+
+      // preserveAutosave=true is the page-load restore path — it must
+      // leave pre-existing overrides alone (they get reconciled by the
+      // subsequent autosave-reapply step, not wiped outright).
+      expect(store.getState().overrides).toEqual({ line_width: 0.99 });
+    });
+
+    it('deletes the process_config autosave on a manual load, so the on-disk pointer no longer refers to the previous profile', async () => {
+      (global.fetch as ReturnType<typeof vi.fn>).mockResolvedValue({
+        ok: true,
+        json: async () => ({ layer_height: '0.2' }),
+      });
+
+      const store = makeStore();
+      store.setState({ parameterDescriptors: DESCRIPTORS });
+
+      await store.getState().selectProcessProfile(PROFILE);
+
+      const deleteCall = (global.fetch as ReturnType<typeof vi.fn>).mock.calls.find(
+        ([url, options]) =>
+          String(url).includes('/api/autosave/process_config') && options?.method === 'DELETE'
+      );
+      expect(deleteCall).toBeDefined();
+    });
   });
 });

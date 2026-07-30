@@ -25,15 +25,40 @@ router = APIRouter(dependencies=[Depends(verify_token)])
 class ProfileEntry(BaseModel):
     """
     Represents a single profile file entry.
-    
+
+    `path` is always an ABSOLUTE filesystem path — for a system (bundled)
+    profile this is a real file under resources/profiles/; for a
+    user-saved config (see printer_config.py's ConfigEntry, which is
+    shaped compatibly with this model for the frontend's benefit) it's a
+    real file under USER_WORKSPACE/{printer,filament,process}/. Using one
+    absolute-path identifier for both means the frontend and every
+    backend consumer (jobs.py, arrange.py, cli_builder.py) can treat
+    "which profile is this" as a single opaque string instead of needing
+    a separate string-prefix convention (the old, now-removed "user:name"
+    scheme) to distinguish the two — see cli_builder.py's
+    _resolve_profile_path_for_cli for how each kind is actually resolved.
+
     Attributes:
         name: Display name of the profile (filename without .json extension)
-        path: Relative path to the profile file from resources/profiles/
+        path: Absolute filesystem path to the profile file
         category: Type of profile (machine, process, or filament)
+        manufacturer: Manufacturer directory name (e.g. "Flashforge") for
+            system profiles; None for user-saved configs, which have no
+            manufacturer of their own (their `inherits` chain resolves to
+            one instead — see cli_builder.py).
+        filename: Path to the profile file relative to
+            resources/profiles/{manufacturer}/{category}/ (may include
+            subdirectories, e.g. "AliZ/AliZ PA-CF @P1-X1.json"); None for
+            user-saved configs.
+        is_user: True for user-saved configs (USER_WORKSPACE), False for
+            system (bundled) profiles.
     """
     name: str
     path: str
     category: Literal["machine", "process", "filament"]
+    manufacturer: str | None = None
+    filename: str | None = None
+    is_user: bool = False
 
 
 class CustomProfileResponse(BaseModel):
@@ -168,20 +193,27 @@ async def get_all_profiles(manufacturer: str | None = None) -> List[ProfileEntry
                         # Only include JSON files
                         if file.endswith('.json'):
                             file_path = Path(root) / file
-                            
-                            # Compute relative path from profiles_root
+
+                            # Compute the filename relative to
+                            # {manufacturer}/{category}/ (may include
+                            # subdirectories) for the `filename` field,
+                            # used by callers needing manufacturer/category/
+                            # filename separately (e.g. the resolved-config
+                            # endpoint).
                             try:
-                                rel_path = file_path.relative_to(profiles_root)
+                                rel_filename = file_path.relative_to(category_dir)
                             except ValueError:
                                 continue
-                            
+
                             # Extract display name (filename without .json extension)
                             name = file[:-5]
-                            
+
                             all_profiles.append(ProfileEntry(
                                 name=name,
-                                path=str(rel_path),
-                                category=category  # type: ignore
+                                path=str(file_path.resolve()),
+                                category=category,  # type: ignore
+                                manufacturer=mfr,
+                                filename=str(rel_filename),
                             ))
             except PermissionError:
                 raise HTTPException(
@@ -238,7 +270,7 @@ async def get_process_profiles(compatible_printer: str | None = None) -> List[Pr
                         continue
                     file_path = Path(root) / filename
                     try:
-                        rel_path = file_path.relative_to(profiles_root)
+                        rel_filename = file_path.relative_to(process_dir)
                     except ValueError:
                         continue
 
@@ -273,7 +305,13 @@ async def get_process_profiles(compatible_printer: str | None = None) -> List[Pr
                             continue
                         if data.get("instantiation", "false") != "true":
                             continue
-                    results.append(ProfileEntry(name=name, path=str(rel_path), category="process"))
+                    results.append(ProfileEntry(
+                        name=name,
+                        path=str(file_path.resolve()),
+                        category="process",
+                        manufacturer=mfr_entry,
+                        filename=str(rel_filename),
+                    ))
     except PermissionError as e:
         raise HTTPException(status_code=500, detail=f"Permission denied: {e}")
     except Exception as e:
@@ -330,12 +368,18 @@ class FilamentProfileInfo(BaseModel):
     
     Attributes:
         name: Display name of the filament profile
-        path: Relative path to the profile file
+        path: Absolute filesystem path to the profile file — see
+            ProfileEntry.path's doc comment (this is a system profile,
+            always under resources/profiles/).
+        manufacturer: Manufacturer directory name.
+        filename: Path relative to resources/profiles/{manufacturer}/filament/.
         material_type: Detected material type (PLA, PETG, etc.)
         compatible_printers: List of printer profile names this filament is compatible with
     """
     name: str
     path: str
+    manufacturer: str
+    filename: str
     material_type: str
     compatible_printers: List[str]
 
@@ -445,9 +489,10 @@ async def get_filament_metadata() -> FilamentMetadata:
                         has_filaments = True
                         file_path = Path(root) / file
                         
-                        # Compute relative path from profiles_root
+                        # Compute the filename relative to
+                        # {manufacturer}/filament/ (may include subdirectories)
                         try:
-                            rel_path = file_path.relative_to(profiles_root)
+                            rel_filename = file_path.relative_to(filament_dir)
                         except ValueError:
                             continue
                         
@@ -474,7 +519,9 @@ async def get_filament_metadata() -> FilamentMetadata:
                         # Add filament info
                         filaments.append(FilamentProfileInfo(
                             name=profile_name,
-                            path=str(rel_path),
+                            path=str(file_path.resolve()),
+                            manufacturer=manufacturer_entry,
+                            filename=str(rel_filename),
                             material_type=material_type,
                             compatible_printers=compatible_printers
                         ))
@@ -564,10 +611,11 @@ async def get_manufacturer_profiles(manufacturer: str) -> List[ProfileEntry]:
                     # Only include JSON files
                     if file.endswith('.json'):
                         file_path = Path(root) / file
-                        
-                        # Compute relative path from profiles_root
+
+                        # Compute the filename relative to
+                        # {manufacturer}/{category}/ (may include subdirectories)
                         try:
-                            rel_path = file_path.relative_to(profiles_root)
+                            rel_filename = file_path.relative_to(category_dir)
                         except ValueError:
                             # Skip if path cannot be made relative (shouldn't happen)
                             continue
@@ -577,8 +625,10 @@ async def get_manufacturer_profiles(manufacturer: str) -> List[ProfileEntry]:
                         
                         profiles.append(ProfileEntry(
                             name=name,
-                            path=str(rel_path),
-                            category=category  # type: ignore - Literal type is checked
+                            path=str(file_path.resolve()),
+                            category=category,  # type: ignore - Literal type is checked
+                            manufacturer=manufacturer,
+                            filename=str(rel_filename),
                         ))
         except PermissionError:
             raise HTTPException(
@@ -724,6 +774,43 @@ def _find_sub_path_by_name(
     for entry in vendor_index.get(list_key, []):
         if entry.get("name") == name:
             return entry.get("sub_path")
+
+    return None
+
+
+def find_manufacturer_and_subpath_by_name(
+    profiles_root: Path, category: str, name: str
+) -> tuple[str, str] | None:
+    """
+    Search every manufacturer's vendor index for a profile whose `name`
+    field matches, across the given category, and return
+    (manufacturer, sub_path) if found.
+
+    Used to resolve a user-saved config's `inherits` field (which stores
+    only the parent's `name`, e.g. "Flashforge Adventurer 5M 0.4 Nozzle")
+    back to the real system profile file that config was based on — see
+    cli_builder.py's user-config resolution path, which needs this to
+    build the same ancestor chain resolve_profile_config() would use for
+    a system profile.
+
+    Returns None if no manufacturer's vendor index lists a profile with
+    that name in that category.
+    """
+    try:
+        manufacturer_dirs = [
+            entry for entry in os.listdir(profiles_root)
+            if (profiles_root / entry).is_dir()
+        ]
+    except OSError:
+        return None
+
+    for manufacturer in manufacturer_dirs:
+        vendor_index = _load_vendor_index(profiles_root, manufacturer)
+        if vendor_index is None:
+            continue
+        sub_path = _find_sub_path_by_name(vendor_index, category, name)
+        if sub_path:
+            return manufacturer, sub_path
 
     return None
 

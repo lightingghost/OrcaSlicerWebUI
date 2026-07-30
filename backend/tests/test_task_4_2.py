@@ -119,26 +119,37 @@ def test_profile_entry_structure(client, auth_headers):
             f"Profile category should be machine, process, or filament, got: {profile['category']}"
 
 
-def test_profile_paths_are_relative(client, auth_headers):
+def test_profile_paths_are_absolute(client, auth_headers):
     """
-    Test that profile paths are relative to resources/profiles/.
-    
-    Validates: Requirements 2.2 (relative path)
+    Test that profile paths are absolute filesystem paths, with the
+    manufacturer/filename decomposition available via dedicated fields —
+    see profiles.py's ProfileEntry.path doc comment for why paths moved
+    from relative-to-resources/profiles/ to absolute (uniform identifier
+    shared with user-saved configs, which have no "resources/profiles/"
+    ancestor to be relative to at all).
+
+    Validates: Requirements 2.2
     """
     response = client.get('/api/profiles/BBL', headers=auth_headers)
     profiles = response.json()
-    
+
     for profile in profiles:
         path = profile['path']
-        # Path should start with manufacturer name (relative to profiles root)
-        assert path.startswith('BBL/'), \
-            f"Profile path should be relative to resources/profiles/, got: {path}"
-        # Path should contain category directory
-        assert any(cat in path for cat in ['/machine/', '/process/', '/filament/']), \
-            f"Profile path should contain category directory, got: {path}"
-        # Path should end with .json
+        # Path should be absolute and end with .json
+        assert path.startswith('/'), \
+            f"Profile path should be an absolute filesystem path, got: {path}"
         assert path.endswith('.json'), \
             f"Profile path should end with .json, got: {path}"
+        # Path should contain the category directory
+        assert any(cat in path for cat in ['/machine/', '/process/', '/filament/']), \
+            f"Profile path should contain category directory, got: {path}"
+        # manufacturer/filename fields should be populated for system profiles
+        assert profile['manufacturer'] == 'BBL', \
+            f"Expected manufacturer 'BBL', got: {profile['manufacturer']}"
+        assert profile['filename'], "filename field should be populated"
+        assert profile['filename'].endswith('.json')
+        assert profile.get('is_user') in (False, None), \
+            "System profiles should not be marked is_user"
 
 
 def test_profile_names_no_extension(client, auth_headers):
@@ -197,11 +208,11 @@ def test_profile_files_exist_on_disk(client, auth_headers):
     response = client.get('/api/profiles/BBL', headers=auth_headers)
     profiles = response.json()
     
-    # Determine the profiles root directory
-    profiles_root = Path('/home/odin/local/orcaslicerWebUI/OrcaSlicer/resources/profiles')
-    
     for profile in profiles:
-        file_path = profiles_root / profile['path']
+        # path is now an absolute filesystem path (see
+        # test_profile_paths_are_absolute) — use it directly rather than
+        # joining onto profiles_root.
+        file_path = Path(profile['path'])
         assert file_path.exists(), \
             f"Profile file should exist on disk: {file_path}"
         assert file_path.is_file(), \
@@ -289,6 +300,7 @@ def test_manufacturer_with_spaces(client, auth_headers):
             for profile in profiles:
                 assert 'Co Print' in profile['path'], \
                     "Profile path should include manufacturer name with space"
+                assert profile['manufacturer'] == 'Co Print'
 
 
 if __name__ == "__main__":

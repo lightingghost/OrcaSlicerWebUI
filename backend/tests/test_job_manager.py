@@ -15,7 +15,18 @@ from zipfile import ZipFile
 import pytest
 import aiosqlite
 
-from app.job_manager import JobManager, _build_positioned_project_3mf
+from app.job_manager import (
+    JobManager,
+    _build_positioned_project_3mf,
+    _extract_cli_flag_value,
+    _extract_gcode_config_value,
+    _extract_input_file_paths,
+    _extract_post_process_from_settings_file,
+    _parse_post_process_scripts,
+    _short_time,
+    _substitute_filename_format,
+    DEFAULT_FILENAME_FORMAT,
+)
 from app.config import Settings
 
 
@@ -1068,3 +1079,570 @@ class TestBuildPositionedProject3mfConfigOverrides:
 
         with ZipFile(snapshot_path) as zf:
             assert "Metadata/model_settings.config" not in set(zf.namelist())
+
+
+class TestExtractCliFlagValue:
+    """
+    Covers _extract_cli_flag_value, used to recover the `post_process`
+    parameter override's value out of an already-built cli_args list (the
+    CLI itself never runs post-processing scripts — see
+    _run_post_process_scripts's doc comment — so job_manager must extract
+    the configured script path(s) itself after the CLI exits).
+    """
+
+    def test_finds_flag_value(self):
+        cli_args = ["/bin/orca-slicer", "--slice", "0", "--post-process=/tmp/addMD5.sh"]
+        assert _extract_cli_flag_value(cli_args, "post-process") == "/tmp/addMD5.sh"
+
+    def test_returns_none_when_flag_absent(self):
+        cli_args = ["/bin/orca-slicer", "--slice", "0"]
+        assert _extract_cli_flag_value(cli_args, "post-process") is None
+
+    def test_value_containing_equals_sign_preserved(self):
+        cli_args = ["--post-process=/tmp/script.sh --flag=value"]
+        assert _extract_cli_flag_value(cli_args, "post-process") == "/tmp/script.sh --flag=value"
+
+
+class TestExtractPostProcessFromSettingsFile:
+    """
+    Covers _extract_post_process_from_settings_file — the fallback source
+    for `post_process` when it was SAVED into a process config (rather
+    than left as a live, unsaved Process-panel edit sent through
+    parameter_overrides/`--post-process=`). Regression coverage for the
+    reported bug: adding a post_process script, saving it into the
+    process config, and slicing again produced gcode with no "; MD5:"
+    line, because job_manager only ever checked the CLI flag and never
+    looked at the resolved process settings file that --load-settings
+    actually pointed at.
+    """
+
+    def test_reads_string_value_from_last_load_settings_path(self, tmp_path):
+        process_settings = tmp_path / "process.json"
+        process_settings.write_text(json.dumps({"post_process": "/tmp/addMD5.sh"}))
+        printer_settings = tmp_path / "printer.json"
+        printer_settings.write_text(json.dumps({"nozzle_diameter": "0.4"}))
+
+        cli_args = [
+            "/bin/orca-slicer", "--slice", "0",
+            "--load-settings", f"{printer_settings};{process_settings}",
+        ]
+        assert _extract_post_process_from_settings_file(cli_args) == "/tmp/addMD5.sh"
+
+    def test_reads_coStrings_list_value_joined_with_semicolon(self, tmp_path):
+        # Native's own on-disk representation of a coStrings option is a
+        # JSON list, not a single string — see PrintConfig.cpp's
+        # `post_process` def (coStrings) / Config.hpp's ConfigOptionStrings.
+        process_settings = tmp_path / "process.json"
+        process_settings.write_text(json.dumps({"post_process": ["/tmp/a.sh", "/tmp/b.sh"]}))
+
+        cli_args = ["/bin/orca-slicer", "--slice", "0", "--load-settings", str(process_settings)]
+        assert _extract_post_process_from_settings_file(cli_args) == "/tmp/a.sh;/tmp/b.sh"
+
+    def test_returns_none_when_post_process_absent(self, tmp_path):
+        process_settings = tmp_path / "process.json"
+        process_settings.write_text(json.dumps({"layer_height": "0.2"}))
+
+        cli_args = ["/bin/orca-slicer", "--slice", "0", "--load-settings", str(process_settings)]
+        assert _extract_post_process_from_settings_file(cli_args) is None
+
+    def test_returns_none_when_post_process_is_empty(self, tmp_path):
+        process_settings = tmp_path / "process.json"
+        process_settings.write_text(json.dumps({"post_process": []}))
+
+        cli_args = ["/bin/orca-slicer", "--slice", "0", "--load-settings", str(process_settings)]
+        assert _extract_post_process_from_settings_file(cli_args) is None
+
+    def test_returns_none_when_load_settings_flag_absent(self):
+        cli_args = ["/bin/orca-slicer", "--slice", "0"]
+        assert _extract_post_process_from_settings_file(cli_args) is None
+
+    def test_returns_none_when_settings_file_missing(self, tmp_path):
+        missing = tmp_path / "does-not-exist.json"
+        cli_args = ["/bin/orca-slicer", "--slice", "0", "--load-settings", str(missing)]
+        assert _extract_post_process_from_settings_file(cli_args) is None
+
+    def test_returns_none_when_settings_file_not_valid_json(self, tmp_path):
+        bad = tmp_path / "process.json"
+        bad.write_text("not json")
+        cli_args = ["/bin/orca-slicer", "--slice", "0", "--load-settings", str(bad)]
+        assert _extract_post_process_from_settings_file(cli_args) is None
+
+
+class TestParsePostProcessScripts:
+    """
+    Covers _parse_post_process_scripts, which must accept either of
+    native OrcaSlicer's own separator conventions for multiple scripts
+    (';' per the config option's documented tooltip, or newlines per its
+    actual coStrings/multiline runtime representation — see the
+    function's doc comment).
+    """
+
+    def test_single_script(self):
+        assert _parse_post_process_scripts("/tmp/addMD5.sh") == ["/tmp/addMD5.sh"]
+
+    def test_semicolon_separated(self):
+        assert _parse_post_process_scripts("/tmp/a.sh;/tmp/b.sh") == ["/tmp/a.sh", "/tmp/b.sh"]
+
+    def test_newline_separated(self):
+        assert _parse_post_process_scripts("/tmp/a.sh\n/tmp/b.sh") == ["/tmp/a.sh", "/tmp/b.sh"]
+
+    def test_strips_whitespace_and_drops_empty_entries(self):
+        assert _parse_post_process_scripts("  /tmp/a.sh ; ;\n/tmp/b.sh  ") == ["/tmp/a.sh", "/tmp/b.sh"]
+
+    def test_empty_value_yields_no_scripts(self):
+        assert _parse_post_process_scripts("") == []
+        assert _parse_post_process_scripts("   ") == []
+
+
+@pytest.mark.asyncio
+async def test_job_execution_runs_configured_post_process_script(test_config, test_db, temp_workspace):
+    """
+    End-to-end: a job whose cli_args include `--post-process=<script>`
+    must have that script actually executed against every .gcode file in
+    the job's output directory after the (mocked, always-exit-0) CLI
+    "completes" — this is the actual behavior being added, since the real
+    OrcaSlicer CLI binary itself never runs post_process (the call is
+    commented out in OrcaSlicer.cpp's --slice path).
+
+    Uses the repo's own scripts/addMD5.sh so this test also guards
+    against the exact regression reported: a completed job's gcode
+    missing the "; MD5:" line despite post_process being configured.
+    """
+    manager = JobManager(test_config, test_db)
+
+    session_id = "test-session"
+    job_id = "post-process-job"
+    output_dir = temp_workspace / "jobs" / job_id / "output"
+    output_dir.mkdir(parents=True)
+
+    gcode_path = output_dir / "plate_1.gcode"
+    gcode_path.write_text("; HEADER_BLOCK_START\nG28\n")
+
+    addmd5_script = (
+        Path(__file__).parent.parent.parent / "scripts" / "addMD5.sh"
+    ).resolve()
+    assert addmd5_script.exists(), f"addMD5.sh not found at {addmd5_script}"
+
+    # A real CLI invocation would be something like
+    # `orca-slicer ... --post-process=/path/to/addMD5.sh`; use `echo` as a
+    # stand-in for the CLI binary itself so this test doesn't depend on
+    # having the real orca-slicer binary available, while still exercising
+    # the real _extract_cli_flag_value -> _run_post_process_scripts path
+    # against the job's ACTUAL cli_args.
+    cli_args = ["/bin/echo", "slicing", f"--post-process={addmd5_script}"]
+
+    async with aiosqlite.connect(test_db) as db:
+        await db.execute("PRAGMA foreign_keys = ON")
+        await db.execute(
+            """
+            INSERT INTO jobs (job_id, session_id, submitted_at, status, action_type, cli_args, output_dir)
+            VALUES (?, ?, datetime('now'), 'queued', 'slice', ?, ?)
+            """,
+            (job_id, session_id, json.dumps(cli_args), str(output_dir)),
+        )
+        await db.commit()
+
+    await manager._execute(job_id)
+
+    async with aiosqlite.connect(test_db) as db:
+        db.row_factory = aiosqlite.Row
+        cursor = await db.execute("SELECT status FROM jobs WHERE job_id = ?", (job_id,))
+        row = await cursor.fetchone()
+        assert row["status"] == "completed"
+
+    # filename_format (see _apply_filename_format) unconditionally renames
+    # every output gcode even when post_process is also configured — since
+    # the input here has no real path/footer, it renames to some
+    # placeholder-substituted name rather than staying "plate_1.gcode".
+    renamed_paths = list(output_dir.glob("*.gcode"))
+    assert len(renamed_paths) == 1, f"Expected exactly one gcode output, found: {renamed_paths}"
+    contents = renamed_paths[0].read_text()
+    assert contents.startswith("; MD5:"), (
+        f"Expected addMD5.sh to prepend an MD5 line, got: {contents[:80]!r}"
+    )
+    assert "G28" in contents
+
+
+@pytest.mark.asyncio
+async def test_job_execution_runs_post_process_saved_into_process_settings_file(test_config, test_db, temp_workspace):
+    """
+    End-to-end regression test for the reported bug: a job with NO
+    `--post-process=...` CLI flag (i.e. the value was saved into the
+    process config rather than left as a live Process-panel edit) must
+    still run the script, by falling back to reading `post_process` out
+    of the resolved process settings file named in `--load-settings` (the
+    LAST path in that semicolon-joined list — see cli_builder.py's
+    build_cli_args, which always emits printer then process).
+    """
+    manager = JobManager(test_config, test_db)
+
+    session_id = "test-session"
+    job_id = "post-process-saved-config-job"
+    output_dir = temp_workspace / "jobs" / job_id / "output"
+    output_dir.mkdir(parents=True)
+
+    gcode_path = output_dir / "plate_1.gcode"
+    gcode_path.write_text("; HEADER_BLOCK_START\nG28\n")
+
+    addmd5_script = (
+        Path(__file__).parent.parent.parent / "scripts" / "addMD5.sh"
+    ).resolve()
+    assert addmd5_script.exists(), f"addMD5.sh not found at {addmd5_script}"
+
+    printer_settings = output_dir / "printer.json"
+    printer_settings.write_text(json.dumps({"nozzle_diameter": "0.4"}))
+    process_settings = output_dir / "process.json"
+    process_settings.write_text(json.dumps({"post_process": str(addmd5_script)}))
+
+    # No --post-process flag at all — only --load-settings, mirroring a
+    # real job built from a process config that already has post_process
+    # saved into it (cli_builder.py deliberately never re-emits it as a
+    # parameter_overrides flag once it's part of the profile).
+    cli_args = [
+        "/bin/echo", "slicing",
+        "--load-settings", f"{printer_settings};{process_settings}",
+    ]
+
+    async with aiosqlite.connect(test_db) as db:
+        await db.execute("PRAGMA foreign_keys = ON")
+        await db.execute(
+            """
+            INSERT INTO jobs (job_id, session_id, submitted_at, status, action_type, cli_args, output_dir)
+            VALUES (?, ?, datetime('now'), 'queued', 'slice', ?, ?)
+            """,
+            (job_id, session_id, json.dumps(cli_args), str(output_dir)),
+        )
+        await db.commit()
+
+    await manager._execute(job_id)
+
+    async with aiosqlite.connect(test_db) as db:
+        db.row_factory = aiosqlite.Row
+        cursor = await db.execute("SELECT status FROM jobs WHERE job_id = ?", (job_id,))
+        row = await cursor.fetchone()
+        assert row["status"] == "completed"
+
+    renamed_paths = list(output_dir.glob("*.gcode"))
+    assert len(renamed_paths) == 1, f"Expected exactly one gcode output, found: {renamed_paths}"
+    contents = renamed_paths[0].read_text()
+    assert contents.startswith("; MD5:"), (
+        f"Expected addMD5.sh to prepend an MD5 line even though post_process "
+        f"was only saved into the process config (no CLI flag), got: {contents[:80]!r}"
+    )
+    assert "G28" in contents
+
+
+@pytest.mark.asyncio
+async def test_job_execution_without_post_process_flag_skips_post_processing(test_config, test_db, temp_workspace):
+    """A job whose cli_args have no `--post-process=...` flag must leave
+    its gcode output completely untouched (no post-processing attempted
+    at all) — this is the common case (most jobs don't configure
+    post_process) and must not regress into always trying to post-process
+    every job."""
+    manager = JobManager(test_config, test_db)
+
+    session_id = "test-session"
+    job_id = "no-post-process-job"
+    output_dir = temp_workspace / "jobs" / job_id / "output"
+    output_dir.mkdir(parents=True)
+
+    gcode_path = output_dir / "plate_1.gcode"
+    original_contents = "; HEADER_BLOCK_START\nG28\n"
+    gcode_path.write_text(original_contents)
+
+    cli_args = ["/bin/echo", "slicing"]
+
+    async with aiosqlite.connect(test_db) as db:
+        await db.execute("PRAGMA foreign_keys = ON")
+        await db.execute(
+            """
+            INSERT INTO jobs (job_id, session_id, submitted_at, status, action_type, cli_args, output_dir)
+            VALUES (?, ?, datetime('now'), 'queued', 'slice', ?, ?)
+            """,
+            (job_id, session_id, json.dumps(cli_args), str(output_dir)),
+        )
+        await db.commit()
+
+    await manager._execute(job_id)
+
+    # filename_format (see _apply_filename_format) still renames the file
+    # unconditionally (native applies its default naming scheme even
+    # without any explicit override) — content must be untouched, but the
+    # name won't stay "plate_1.gcode" since there's no post_process
+    # involved here at all.
+    remaining_gcodes = list(output_dir.glob("*.gcode"))
+    assert len(remaining_gcodes) == 1
+    assert remaining_gcodes[0].read_text() == original_contents
+
+
+@pytest.mark.asyncio
+async def test_job_execution_post_process_script_failure_does_not_fail_job(test_config, test_db, temp_workspace):
+    """A post-processing script that exits non-zero must be logged and
+    skipped, not turn an already-successful (exit code 0) CLI run into a
+    failed job — the slice itself succeeded; only the optional
+    post-processing step didn't."""
+    manager = JobManager(test_config, test_db)
+
+    session_id = "test-session"
+    job_id = "post-process-fail-job"
+    output_dir = temp_workspace / "jobs" / job_id / "output"
+    output_dir.mkdir(parents=True)
+
+    gcode_path = output_dir / "plate_1.gcode"
+    gcode_path.write_text("G28\n", encoding="utf-8")
+
+    failing_script = temp_workspace / "fail.sh"
+    failing_script.write_text("#!/bin/sh\nexit 1\n")
+    failing_script.chmod(0o755)
+
+    cli_args = ["/bin/echo", "slicing", f"--post-process={failing_script}"]
+
+    async with aiosqlite.connect(test_db) as db:
+        await db.execute("PRAGMA foreign_keys = ON")
+        await db.execute(
+            """
+            INSERT INTO jobs (job_id, session_id, submitted_at, status, action_type, cli_args, output_dir)
+            VALUES (?, ?, datetime('now'), 'queued', 'slice', ?, ?)
+            """,
+            (job_id, session_id, json.dumps(cli_args), str(output_dir)),
+        )
+        await db.commit()
+
+    await manager._execute(job_id)
+
+    async with aiosqlite.connect(test_db) as db:
+        db.row_factory = aiosqlite.Row
+        cursor = await db.execute("SELECT status, error_message FROM jobs WHERE job_id = ?", (job_id,))
+        row = await cursor.fetchone()
+        assert row["status"] == "completed"
+        assert row["error_message"] is None
+
+    # Content is untouched since the failing script never wrote to it —
+    # but filename_format still renames the file unconditionally (see
+    # _apply_filename_format), so look up whatever it got renamed to
+    # rather than asserting on the original plate_1.gcode path.
+    remaining_gcodes = list(output_dir.glob("*.gcode"))
+    assert len(remaining_gcodes) == 1
+    assert remaining_gcodes[0].read_text() == "G28\n"
+
+
+class TestExtractInputFilePaths:
+    """Covers _extract_input_file_paths, used to recover
+    input_filename_base for filename_format substitution from an
+    already-built cli_args list (positional args before the first
+    --flag, per build_cli_args's fixed ordering)."""
+
+    def test_single_input_file(self):
+        cli_args = ["/bin/orca-slicer", "/tmp/model.stl", "--slice", "0"]
+        assert _extract_input_file_paths(cli_args) == ["/tmp/model.stl"]
+
+    def test_multiple_input_files(self):
+        cli_args = ["/bin/orca-slicer", "/tmp/a.stl", "/tmp/b.stl", "--slice", "0"]
+        assert _extract_input_file_paths(cli_args) == ["/tmp/a.stl", "/tmp/b.stl"]
+
+    def test_no_input_files(self):
+        cli_args = ["/bin/orca-slicer", "--slice", "0"]
+        assert _extract_input_file_paths(cli_args) == []
+
+
+class TestExtractGcodeConfigValue:
+    """Covers _extract_gcode_config_value, which reads a resolved config
+    value back out of a sliced gcode's own CONFIG_BLOCK footer dump
+    (e.g. "; filament_type = PETG")."""
+
+    def test_extracts_simple_value(self):
+        text = "; some line\n; filament_type = PETG\n; other = x\n"
+        assert _extract_gcode_config_value(text, "filament_type") == "PETG"
+
+    def test_extracts_value_with_spaces_in_key(self):
+        text = "; estimated printing time (normal mode) = 15m 47s\n"
+        assert (
+            _extract_gcode_config_value(text, "estimated printing time (normal mode)")
+            == "15m 47s"
+        )
+
+    def test_missing_key_returns_none(self):
+        text = "; filament_type = PETG\n"
+        assert _extract_gcode_config_value(text, "nozzle_diameter") is None
+
+
+class TestShortTime:
+    """Covers _short_time, a port of native OrcaSlicer's short_time()
+    (Utils.hpp) used to render the {print_time} filename_format
+    placeholder exactly as native would name the file."""
+
+    def test_minutes_and_seconds(self):
+        # Matches the real observed native-named export box_PETG_15m47s.gcode
+        assert _short_time("15m 47s") == "15m47s"
+
+    def test_hours_rounds_to_minutes(self):
+        assert _short_time("1h 30m 45s") == "1h31m"
+
+    def test_hours_no_rounding_under_30s(self):
+        assert _short_time("1h 30m 20s") == "1h30m"
+
+    def test_days(self):
+        assert _short_time("2d 3h 15m 10s") == "2d3h15m"
+
+    def test_seconds_only(self):
+        assert _short_time("45s") == "45s"
+
+    def test_sub_second(self):
+        assert _short_time("0.5s") == "<1s"
+
+    def test_zero(self):
+        assert _short_time("0s") == "0s"
+
+
+class TestSubstituteFilenameFormat:
+    """Covers _substitute_filename_format's placeholder substitution
+    against the exact default filename_format value documented in
+    PrintConfig.cpp / data/parameters.json."""
+
+    def test_default_format(self):
+        result = _substitute_filename_format(
+            DEFAULT_FILENAME_FORMAT,
+            input_filename_base="box",
+            filament_type="PETG",
+            print_time="15m47s",
+        )
+        assert result == "box_PETG_15m47s.gcode"
+
+    def test_unknown_placeholder_left_as_literal(self):
+        result = _substitute_filename_format(
+            "{input_filename_base}_{unknown_key}.gcode",
+            input_filename_base="box",
+            filament_type="PETG",
+            print_time="15m47s",
+        )
+        assert result == "box_{unknown_key}.gcode"
+
+    def test_no_placeholders(self):
+        result = _substitute_filename_format(
+            "static_name.gcode",
+            input_filename_base="box",
+            filament_type="PETG",
+            print_time="15m47s",
+        )
+        assert result == "static_name.gcode"
+
+
+@pytest.mark.asyncio
+async def test_job_execution_applies_default_filename_format(test_config, test_db, temp_workspace):
+    """
+    End-to-end regression test for the reported bug: a completed slice
+    job's output gcode must be renamed to
+    {input_filename_base}_{filament_type[initial_tool]}_{print_time}.gcode
+    (PrintConfig.cpp's own default for filename_format) even though NO
+    filename_format override was configured — native applies this naming
+    scheme unconditionally, and the real OrcaSlicer CLI binary never
+    performs the substitution itself (see _apply_filename_format's doc
+    comment), so job_manager must do it after the CLI exits.
+    """
+    manager = JobManager(test_config, test_db)
+
+    session_id = "test-session"
+    job_id = "filename-format-job"
+    output_dir = temp_workspace / "jobs" / job_id / "output"
+    output_dir.mkdir(parents=True)
+
+    input_stl = temp_workspace / "sessions" / session_id / "uploads" / "box.stl"
+    input_stl.parent.mkdir(parents=True)
+    input_stl.write_text("dummy stl")
+
+    original_gcode = output_dir / "plate_1.gcode"
+    original_gcode.write_text(
+        "; HEADER_BLOCK_START\nG28\n"
+        "; CONFIG_BLOCK_START\n"
+        "; filament_type = PETG\n"
+        "; estimated printing time (normal mode) = 15m 47s\n"
+        "; CONFIG_BLOCK_END\n"
+    )
+
+    # A real CLI invocation includes the input STL path as a positional
+    # arg before --slice, exactly like build_cli_args produces.
+    cli_args = ["/bin/echo", str(input_stl), "--slice", "0"]
+
+    async with aiosqlite.connect(test_db) as db:
+        await db.execute("PRAGMA foreign_keys = ON")
+        await db.execute(
+            """
+            INSERT INTO jobs (job_id, session_id, submitted_at, status, action_type, cli_args, output_dir)
+            VALUES (?, ?, datetime('now'), 'queued', 'slice', ?, ?)
+            """,
+            (job_id, session_id, json.dumps(cli_args), str(output_dir)),
+        )
+        await db.commit()
+
+    await manager._execute(job_id)
+
+    async with aiosqlite.connect(test_db) as db:
+        db.row_factory = aiosqlite.Row
+        cursor = await db.execute("SELECT status FROM jobs WHERE job_id = ?", (job_id,))
+        row = await cursor.fetchone()
+        assert row["status"] == "completed"
+
+    expected_path = output_dir / "box_PETG_15m47s.gcode"
+    assert expected_path.exists(), (
+        f"Expected renamed output at {expected_path}, contents of output_dir: "
+        f"{list(output_dir.iterdir())}"
+    )
+    assert not original_gcode.exists()
+
+    # Registered output_files record must reference the RENAMED file, not
+    # the original plate_N.gcode name.
+    async with aiosqlite.connect(test_db) as db:
+        db.row_factory = aiosqlite.Row
+        cursor = await db.execute(
+            "SELECT filename FROM output_files WHERE job_id = ?", (job_id,)
+        )
+        rows = await cursor.fetchall()
+        filenames = {r["filename"] for r in rows}
+    assert "box_PETG_15m47s.gcode" in filenames
+    assert "plate_1.gcode" not in filenames
+
+
+@pytest.mark.asyncio
+async def test_job_execution_respects_filename_format_override(test_config, test_db, temp_workspace):
+    """A job whose cli_args include an explicit
+    `--filename-format=...` override must use THAT template instead of
+    the built-in default."""
+    manager = JobManager(test_config, test_db)
+
+    session_id = "test-session"
+    job_id = "filename-format-override-job"
+    output_dir = temp_workspace / "jobs" / job_id / "output"
+    output_dir.mkdir(parents=True)
+
+    input_stl = temp_workspace / "sessions" / session_id / "uploads" / "widget.stl"
+    input_stl.parent.mkdir(parents=True)
+    input_stl.write_text("dummy stl")
+
+    original_gcode = output_dir / "plate_1.gcode"
+    original_gcode.write_text(
+        "; CONFIG_BLOCK_START\n"
+        "; filament_type = PLA\n"
+        "; estimated printing time (normal mode) = 2h 5m 0s\n"
+        "; CONFIG_BLOCK_END\n"
+    )
+
+    cli_args = [
+        "/bin/echo", str(input_stl), "--slice", "0",
+        "--filename-format={input_filename_base}-custom.gcode",
+    ]
+
+    async with aiosqlite.connect(test_db) as db:
+        await db.execute("PRAGMA foreign_keys = ON")
+        await db.execute(
+            """
+            INSERT INTO jobs (job_id, session_id, submitted_at, status, action_type, cli_args, output_dir)
+            VALUES (?, ?, datetime('now'), 'queued', 'slice', ?, ?)
+            """,
+            (job_id, session_id, json.dumps(cli_args), str(output_dir)),
+        )
+        await db.commit()
+
+    await manager._execute(job_id)
+
+    assert (output_dir / "widget-custom.gcode").exists()
+    assert not original_gcode.exists()

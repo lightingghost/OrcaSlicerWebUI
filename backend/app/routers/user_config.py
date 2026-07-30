@@ -26,10 +26,22 @@ class UserConfig(BaseModel):
 
     Attributes:
         selected_manufacturer: Currently selected manufacturer name
-        selected_printer_profile_path: Path to selected printer profile
+        selected_printer_profile_path: Absolute path to selected printer
+            profile — either a system profile or a user-saved config (see
+            printer_config.py's ConfigEntry.path doc comment; there is no
+            "user:name" string-prefix convention, `selected_printer_is_user`
+            below tells the two apart).
+        selected_printer_is_user: True if selected_printer_profile_path
+            refers to a user-saved config rather than a system profile.
         selected_bed_type: Selected bed type (physical plate)
-        selected_process_profile_path: Path to selected process profile
-        selected_filament_profile_paths: List of paths to selected filament profiles
+        selected_process_profile_path: Absolute path to selected process
+            profile (system or user-saved — see selected_printer_is_user).
+        selected_process_is_user: True if selected_process_profile_path
+            refers to a user-saved config.
+        selected_filament_profile_paths: List of absolute paths to selected
+            filament profiles (system or user-saved).
+        selected_filament_is_user: Parallel to selected_filament_profile_paths;
+            True at index i if that filament path is a user-saved config.
         printer_config_autosave: Pending (unsaved) edits made in the Printer
             settings dialog for the currently selected printer profile, keyed
             the same way as USER_WORKSPACE/autosave/printer_config.json (a
@@ -55,9 +67,12 @@ class UserConfig(BaseModel):
     """
     selected_manufacturer: Optional[str] = None
     selected_printer_profile_path: Optional[str] = None
+    selected_printer_is_user: bool = False
     selected_bed_type: Optional[str] = None
     selected_process_profile_path: Optional[str] = None
+    selected_process_is_user: bool = False
     selected_filament_profile_paths: list[str] = []
+    selected_filament_is_user: list[bool] = []
     printer_config_autosave: Optional[dict] = None
     process_config_autosave: Optional[dict] = None
     filament_config_autosaves: list[Optional[dict]] = []

@@ -311,8 +311,19 @@ const Section: React.FC<{
 export interface FilamentConfigDialogProps {
   isOpen: boolean;
   onClose: () => void;
-  /** Profile path e.g. "Bambu Lab/filament/Bambu PLA Basic @BBL A1M.json" */
+  /** Absolute filesystem path of the selected filament profile — see
+   *  ProfileEntry.path's doc comment. */
   profilePath: string | null;
+  /** manufacturer/filename of the selected profile (system profiles
+   *  only); absent for user-saved configs, identified purely by
+   *  `isUserConfig` + the config's own name (derived from profilePath's
+   *  basename). */
+  profileManufacturer?: string;
+  profileFilename?: string;
+  /** True if profilePath refers to a user-saved config rather than a
+   *  system (bundled) profile — no "user:name" string-prefix convention
+   *  on profilePath itself to sniff this from anymore. */
+  isUserConfig: boolean;
   filamentName: string;
   /** 0-based index of this filament in the selected filaments list — determines autosave filename */
   filamentIndex: number;
@@ -321,7 +332,7 @@ export interface FilamentConfigDialogProps {
 export type FilamentConfig = Record<string, unknown>;
 
 export const FilamentConfigDialog: React.FC<FilamentConfigDialogProps> = ({
-  isOpen, onClose, profilePath, filamentName, filamentIndex,
+  isOpen, onClose, profilePath, profileManufacturer, profileFilename, isUserConfig, filamentName, filamentIndex,
 }) => {
   const [schema, setSchema]               = useState<OptionsDef | null>(null);
   const [activeTabId, setActiveTabId]     = useState<string>('filament');
@@ -362,7 +373,6 @@ export const FilamentConfigDialog: React.FC<FilamentConfigDialogProps> = ({
     })));
 
     const authHeader = { Authorization: `Bearer ${localStorage.getItem('api_token') || ''}` };
-    const isUserConfig = profilePath.startsWith('user:');
 
     const doLoad = async () => {
       // ── 1. Resolve baseConfig from the currently selected profile ──────
@@ -370,33 +380,29 @@ export const FilamentConfigDialog: React.FC<FilamentConfigDialogProps> = ({
       let effectiveInherits = '';
 
       if (isUserConfig) {
-        const cfgName = profilePath.slice('user:'.length);
+        const cfgName = profilePath.split('/').pop()?.replace(/\.json$/, '') ?? profilePath;
         setConfigName(cfgName);
         const userConfig: Record<string,unknown> = await apiClient.getFilamentConfig(cfgName, false);
         const inherits = userConfig.inherits as string | undefined;
         effectiveInherits = inherits ?? '';
 
         if (inherits) {
-          const allProfiles: Array<{name:string; path:string}> = await fetch('/api/profiles', { headers: authHeader }).then(r => r.json());
-          const parent = allProfiles.find(p => p.name === inherits && p.path.includes('/filament/'));
-          if (parent) {
-            const pts = parent.path.split('/');
-            const resolved = await apiClient.getResolvedProfile(pts[0], pts[1], pts.slice(2).join('/'));
+          const allProfiles: Array<{name:string;path:string;manufacturer?:string;category:string;filename?:string}> =
+            await fetch('/api/profiles', { headers: authHeader }).then(r => r.json());
+          const parent = allProfiles.find(p => p.name === inherits && p.category === 'filament');
+          if (parent && parent.manufacturer && parent.filename) {
+            const resolved = await apiClient.getResolvedProfile(parent.manufacturer, parent.category, parent.filename);
             base = { ...base, ...resolved };
           }
         }
         // User config itself forms the base (no unsaved changes from user config perspective)
         base = { ...base, ...userConfig };
-      } else {
-        const parts        = profilePath.split('/');
-        const manufacturer = parts[0];
-        const category     = parts[1];
-        const filename     = parts.slice(2).join('/');
-        setConfigName(filename.replace(/\.json$/, ''));
+      } else if (profileManufacturer && profileFilename) {
+        setConfigName(profileFilename.replace(/\.json$/, ''));
 
         const [resolved, raw] = await Promise.all([
-          apiClient.getResolvedProfile(manufacturer, category, filename),
-          fetch(`/api/profiles/${manufacturer}/${category}/${encodeURIComponent(filename)}`, { headers: authHeader }).then(r => r.json()),
+          apiClient.getResolvedProfile(profileManufacturer, 'filament', profileFilename),
+          fetch(`/api/profiles/${profileManufacturer}/filament/${encodeURIComponent(profileFilename)}`, { headers: authHeader }).then(r => r.json()),
         ]);
         base = { ...base, ...resolved };
         effectiveInherits = raw.name ?? raw.inherits ?? '';
@@ -427,7 +433,7 @@ export const FilamentConfigDialog: React.FC<FilamentConfigDialogProps> = ({
       .catch(err => console.error('Failed to load filament config:', err))
       .finally(() => { setLoading(false); isFirstLoad.current = false; });
 
-  }, [isOpen, profilePath, schema, filamentIndex]);
+  }, [isOpen, profilePath, isUserConfig, profileManufacturer, profileFilename, schema, filamentIndex]);
 
   // `inherits` and `_profile_path` are bookkeeping metadata added to the
   // autosave payload (see buildSavePayload) — they never exist on baseConfig,
@@ -478,15 +484,32 @@ export const FilamentConfigDialog: React.FC<FilamentConfigDialogProps> = ({
 
   const handleSave = () => setSaveAsOpen(true);
 
+  // Re-save the session's user_config.yaml so a saved dialog's newly
+  // selected profile (below) and the printer/filament dialogs' autosaves
+  // are embedded there too (see profileSlice.saveUserConfig) — this is
+  // what lets Slice discover the edits without an explicit Save.
+  const saveUserConfig = useStore((state) => state.saveUserConfig);
+  const replaceSelectedFilamentProfileAt = useStore((state) => state.replaceSelectedFilamentProfileAt);
+
   const handleSaveConfirm = async (name: string) => {
     setSaveAsOpen(false);
     setConfigName(name);
     setSaveStatus('saving');
     try {
-      await apiClient.saveFilamentConfig(name, buildSavePayload(), false);
+      const saved = await apiClient.saveFilamentConfig(name, buildSavePayload(), false);
       setBaseConfig({ ...config });
       setSaveStatus('saved');
       setTimeout(() => setSaveStatus('idle'), 2000);
+
+      // Automatically load the newly saved config into this filament
+      // slot — replaces the entry at filamentIndex in the store's
+      // selectedFilamentProfiles, which flows back into this dialog's
+      // profilePath/isUserConfig props (via FilamentRow.tsx's
+      // editingFilament) and re-triggers the load effect above.
+      replaceSelectedFilamentProfileAt(filamentIndex, {
+        name: saved.name, path: saved.path, category: saved.category, is_user: true,
+      });
+      await saveUserConfig();
     } catch {
       setSaveStatus('error');
       setTimeout(() => setSaveStatus('idle'), 3000);
@@ -495,10 +518,7 @@ export const FilamentConfigDialog: React.FC<FilamentConfigDialogProps> = ({
 
   // Flush pending edits to the autosave immediately on close (bypassing
   // the 800ms debounce) so a quick edit-then-close never loses the last
-  // keystroke, and re-save the session's user_config.yaml so the
-  // autosave is embedded there too (see profileSlice.saveUserConfig) —
-  // this is what lets Slice discover the edits without an explicit Save.
-  const saveUserConfig = useStore((state) => state.saveUserConfig);
+  // keystroke.
   const handleClose = useCallback(() => {
     if (autosaveTimer.current) {
       clearTimeout(autosaveTimer.current);

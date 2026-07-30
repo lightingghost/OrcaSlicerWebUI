@@ -318,18 +318,34 @@ async def arrange_objects(
     file_paths_by_file_id = await _lookup_file_paths(db, distinct_file_ids, session_id)
 
     profiles_root = settings.profiles_root
-    raw_printer_path = profiles_root / arrange_request.printer_profile_path
-    if not raw_printer_path.exists():
-        raise HTTPException(
-            status_code=status.HTTP_422_UNPROCESSABLE_ENTITY,
-            detail=f"Printer profile not found: {arrange_request.printer_profile_path}",
-        )
-    raw_process_path = profiles_root / arrange_request.process_profile_path
-    if not raw_process_path.exists():
-        raise HTTPException(
-            status_code=status.HTTP_422_UNPROCESSABLE_ENTITY,
-            detail=f"Process profile not found: {arrange_request.process_profile_path}",
-        )
+
+    def _check_profile_exists(path_str: str, user_config_dir: Path, label: str) -> None:
+        """Validate a profile path against BOTH allowed roots (system
+        profiles under profiles_root, or a user-saved config under the
+        matching USER_WORKSPACE category dir) — see printer_config.py's
+        ConfigEntry.path doc comment for why both are plain absolute
+        paths now with no "user:"-style prefix to distinguish them."""
+        from app.cli_builder import resolve_and_guard
+
+        raw_path = Path(path_str)
+        try:
+            full_path = resolve_and_guard(raw_path, profiles_root)
+        except ValueError:
+            try:
+                full_path = resolve_and_guard(raw_path, user_config_dir)
+            except ValueError:
+                raise HTTPException(
+                    status_code=status.HTTP_422_UNPROCESSABLE_ENTITY,
+                    detail=f"{label} profile not found: {path_str}",
+                )
+        if not full_path.exists() or not full_path.is_file():
+            raise HTTPException(
+                status_code=status.HTTP_422_UNPROCESSABLE_ENTITY,
+                detail=f"{label} profile not found: {path_str}",
+            )
+
+    _check_profile_exists(arrange_request.printer_profile_path, settings.printer_configs_dir, "Printer")
+    _check_profile_exists(arrange_request.process_profile_path, settings.process_configs_dir, "Process")
 
     with tempfile.TemporaryDirectory(prefix="arrange_profile_") as profile_tmp_dir_str:
         # Bed shape (`printable_area`) frequently lives on a shared parent
@@ -351,12 +367,14 @@ async def arrange_objects(
                 "machine",
                 profiles_root,
                 Path(profile_tmp_dir_str),
+                user_config_dir=settings.printer_configs_dir,
             )
             process_path = _resolve_profile_path_for_cli(
                 arrange_request.process_profile_path,
                 "process",
                 profiles_root,
                 Path(profile_tmp_dir_str),
+                user_config_dir=settings.process_configs_dir,
             )
         except Exception as e:
             raise HTTPException(status_code=status.HTTP_422_UNPROCESSABLE_ENTITY, detail=str(e))

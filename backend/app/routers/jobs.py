@@ -373,20 +373,46 @@ async def submit_job(
             },
         )
     
-    # Step 3: Validate profile paths exist on disk
+    # Step 3: Validate profile paths exist on disk.
+    #
+    # A profile path is either a SYSTEM profile (under settings.profiles_root)
+    # or a user-saved config (under the matching USER_WORKSPACE category
+    # dir — see printer_config.py's ConfigEntry.path doc comment; both are
+    # plain absolute filesystem paths now, no "user:"-style prefix to
+    # distinguish them). Each field is checked against ITS OWN pair of
+    # allowed roots so e.g. a printer_profile_path can't be satisfied by
+    # a file that only exists under the filament configs dir.
     profiles_root = settings.profiles_root
-    
+
     profile_paths_to_check = [
-        ("printer_profile_path", job_request.printer_profile_path),
-        ("process_profile_path", job_request.process_profile_path),
+        ("printer_profile_path", job_request.printer_profile_path, settings.printer_configs_dir),
+        ("process_profile_path", job_request.process_profile_path, settings.process_configs_dir),
     ] + [
-        ("filament_profile_path", fp) for fp in job_request.filament_profile_paths
+        ("filament_profile_path", fp, settings.filament_configs_dir)
+        for fp in job_request.filament_profile_paths
     ]
-    
+
     profile_validation_errors = []
-    
-    for field_name, profile_path in profile_paths_to_check:
-        full_path = profiles_root / profile_path
+
+    for field_name, profile_path, user_config_dir in profile_paths_to_check:
+        raw_path = Path(profile_path)
+        # Legacy relative paths (still used by a few internal callers/tests)
+        # are resolved against profiles_root first; an absolute path is
+        # only accepted if it resolves inside profiles_root OR the
+        # matching user config dir — resolve_and_guard raises ValueError
+        # (path traversal / outside every allowed root) or we fall through
+        # to the not-found error below.
+        try:
+            full_path = resolve_and_guard(raw_path, profiles_root)
+        except ValueError:
+            try:
+                full_path = resolve_and_guard(raw_path, user_config_dir)
+            except ValueError:
+                profile_validation_errors.append(
+                    f"{field_name}: Profile file not found at {profile_path}"
+                )
+                continue
+
         if not full_path.exists() or not full_path.is_file():
             profile_validation_errors.append(
                 f"{field_name}: Profile file not found at {profile_path}"

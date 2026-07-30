@@ -376,13 +376,24 @@ export interface PrinterConfigDialogProps {
   isOpen: boolean;
   onClose: () => void;
   profilePath: string | null;
+  /** manufacturer/filename of the selected profile (system profiles
+   *  only — see ProfileEntry's doc comment); absent for user-saved
+   *  configs, which are identified purely by `isUserConfig` + the
+   *  config's own name (derived from profilePath's basename). */
+  profileManufacturer?: string;
+  profileFilename?: string;
+  /** True if profilePath refers to a user-saved config (USER_WORKSPACE)
+   *  rather than a system (bundled) profile — see ProfileEntry.is_user's
+   *  doc comment. There is no "user:name" string-prefix convention on
+   *  profilePath itself to sniff this from anymore. */
+  isUserConfig: boolean;
   printerName: string;
 }
 
 export type PrinterConfig = Record<string, unknown>;
 
 export const PrinterConfigDialog: React.FC<PrinterConfigDialogProps> = ({
-  isOpen, onClose, profilePath, printerName,
+  isOpen, onClose, profilePath, profileManufacturer, profileFilename, isUserConfig, printerName,
 }) => {
   const [schema, setSchema]           = useState<OptionsDef | null>(null);
   const [activeTabId, setActiveTabId] = useState<string>('basic');
@@ -429,7 +440,6 @@ export const PrinterConfigDialog: React.FC<PrinterConfigDialogProps> = ({
     );
 
     const authHeader = { Authorization: `Bearer ${localStorage.getItem('api_token') || ''}` };
-    const isUserConfig = profilePath.startsWith('user:');
 
     const doLoad = async () => {
       // ── 1. Resolve baseConfig from the currently selected profile ──────
@@ -437,32 +447,32 @@ export const PrinterConfigDialog: React.FC<PrinterConfigDialogProps> = ({
       let effectiveInherits = '';
 
       if (isUserConfig) {
-        const cfgName = profilePath.slice('user:'.length);
+        // profilePath is the config's own name for user-saved configs
+        // (see PrinterSelector.tsx's onSelect building { name, path: cfg.path }
+        // — but the CRUD endpoint is keyed by name, not the absolute path,
+        // so derive the name from the path's basename).
+        const cfgName = profilePath.split('/').pop()?.replace(/\.json$/, '') ?? profilePath;
         setConfigName(cfgName);
         const userConfig: Record<string,unknown> = await apiClient.getPrinterConfig(cfgName, false);
         const inherits = userConfig.inherits as string | undefined;
         effectiveInherits = inherits ?? '';
 
         if (inherits) {
-          const allProfiles: Array<{name:string;path:string}> = await fetch('/api/profiles', { headers: authHeader }).then(r => r.json());
-          const parent = allProfiles.find(p => p.name === inherits && p.path.includes('/machine/'));
-          if (parent) {
-            const pts = parent.path.split('/');
-            const resolved = await apiClient.getResolvedProfile(pts[0], pts[1], pts.slice(2).join('/'));
+          const allProfiles: Array<{name:string;path:string;manufacturer?:string;category:string;filename?:string}> =
+            await fetch('/api/profiles', { headers: authHeader }).then(r => r.json());
+          const parent = allProfiles.find(p => p.name === inherits && p.category === 'machine');
+          if (parent && parent.manufacturer && parent.filename) {
+            const resolved = await apiClient.getResolvedProfile(parent.manufacturer, parent.category, parent.filename);
             base = { ...base, ...resolved };
           }
         }
         base = { ...base, ...userConfig };
-      } else {
-        const parts        = profilePath.split('/');
-        const manufacturer = parts[0];
-        const category     = parts[1];
-        const filename     = parts.slice(2).join('/');
-        setConfigName(filename.replace(/\.json$/, ''));
+      } else if (profileManufacturer && profileFilename) {
+        setConfigName(profileFilename.replace(/\.json$/, ''));
 
         const [resolved, raw] = await Promise.all([
-          apiClient.getResolvedProfile(manufacturer, category, filename),
-          fetch(`/api/profiles/${manufacturer}/${category}/${encodeURIComponent(filename)}`, { headers: authHeader }).then(r => r.json()),
+          apiClient.getResolvedProfile(profileManufacturer, 'machine', profileFilename),
+          fetch(`/api/profiles/${profileManufacturer}/machine/${encodeURIComponent(profileFilename)}`, { headers: authHeader }).then(r => r.json()),
         ]);
         base = { ...base, ...resolved };
         effectiveInherits = raw.name ?? raw.inherits ?? '';
@@ -491,7 +501,7 @@ export const PrinterConfigDialog: React.FC<PrinterConfigDialogProps> = ({
     doLoad()
       .catch(err => console.error('Failed to load printer config:', err))
       .finally(() => { setLoading(false); isFirstLoad.current = false; });
-  }, [isOpen, profilePath, schema]);
+  }, [isOpen, profilePath, isUserConfig, profileManufacturer, profileFilename, schema]);
 
   // Compute changed keys (current vs base).
   // `inherits` and `_profile_path` are bookkeeping metadata added to the
@@ -570,17 +580,29 @@ export const PrinterConfigDialog: React.FC<PrinterConfigDialogProps> = ({
     onClose();
   }, [profilePath, changedKeys, buildSavePayload, saveUserConfig, onClose]);
 
+  const selectPrinterProfile = useStore((state) => state.selectPrinterProfile);
+
   const handleSaveConfirm = async (name: string) => {
     setSaveAsOpen(false);
     setConfigName(name);
     setSaveStatus('saving');
     try {
       const payload = buildSavePayload();
-      await apiClient.savePrinterConfig(name, payload, false);
+      const saved = await apiClient.savePrinterConfig(name, payload, false);
       // Commit: new base becomes current state so change indicators clear
       setBaseConfig({ ...config });
       setSaveStatus('saved');
       setTimeout(() => setSaveStatus('idle'), 2000);
+
+      // Automatically load the newly saved config — selecting it updates
+      // the store's selectedPrinterProfile, which flows back into this
+      // dialog's profilePath/isUserConfig props (see Layout/LeftPanel.tsx)
+      // and re-triggers the load effect above, refreshing baseConfig from
+      // the file we just wrote. Without this the dialog would keep
+      // editing under the OLD profile's identity even though a new
+      // config now exists on disk.
+      await selectPrinterProfile({ name: saved.name, path: saved.path, category: saved.category, is_user: true });
+      await saveUserConfig();
     } catch {
       setSaveStatus('error');
       setTimeout(() => setSaveStatus('idle'), 3000);

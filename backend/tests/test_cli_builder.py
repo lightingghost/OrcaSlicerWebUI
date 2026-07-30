@@ -103,6 +103,17 @@ class MockConfig:
         self.tmp_root.mkdir(exist_ok=True)
         self.profiles_root = tmp_path / "profiles"
         self.profiles_root.mkdir(exist_ok=True)
+        # User-saved config directories (see printer_config.py's ConfigEntry
+        # and cli_builder.py's _resolve_profile_path_for_cli) — created here
+        # so tests exercising a user-saved custom profile (e.g. the reported
+        # "save printer config as a new name, then Slice" bug) have
+        # somewhere real to write one.
+        self.printer_configs_dir = tmp_path / "user_configs" / "printer"
+        self.printer_configs_dir.mkdir(parents=True, exist_ok=True)
+        self.process_configs_dir = tmp_path / "user_configs" / "process"
+        self.process_configs_dir.mkdir(parents=True, exist_ok=True)
+        self.filament_configs_dir = tmp_path / "user_configs" / "filament"
+        self.filament_configs_dir.mkdir(parents=True, exist_ok=True)
 
 
 class TestBuildCliArgsBasic:
@@ -331,6 +342,139 @@ class TestBuildCliArgsProfiles:
         
         with pytest.raises(ValueError, match="Path traversal detected"):
             build_cli_args(job, config, {}, output_dir)
+
+
+class TestBuildCliArgsUserSavedProfiles:
+    """
+    Regression coverage for the reported bug: editing a printer config in
+    PrinterConfigDialog and saving it as a new custom profile (e.g.
+    "Flashforge Adventurer 5M 0.4 Nozzle - Copy") made the Slice button
+    fail with a 422, because the resulting absolute path
+    (USER_WORKSPACE/printer/{name}.json) had nowhere to resolve to a
+    fully inheritance-resolved config — only resources/profiles/ paths
+    were ever handled. These tests exercise build_cli_args end-to-end
+    with a real user-saved config file, verifying it resolves against
+    its `inherits` system profile via the vendor index rather than
+    failing or falling through unresolved.
+    """
+
+    def _write_vendor_index(self, profiles_root: Path, manufacturer: str, machine_sub_path: str) -> None:
+        import json
+        vendor_index = {
+            "machine_list": [{"name": "Test Printer 0.4 Nozzle", "sub_path": machine_sub_path}],
+        }
+        (profiles_root / f"{manufacturer}.json").write_text(json.dumps(vendor_index))
+
+    def test_user_saved_printer_config_resolves_against_inherits(self, tmp_path):
+        """
+        A user-saved printer config (absolute path under
+        config.printer_configs_dir) whose `inherits` names a real system
+        profile must resolve to a MERGED config (system profile's own
+        keys + the user's override on top), not fail and not silently
+        drop the system profile's inherited keys.
+        """
+        config = MockConfig(tmp_path)
+        session_dir = config.tmp_root / "sessions" / "s1"
+        session_dir.mkdir(parents=True)
+        output_dir = config.tmp_root / "jobs" / "j1" / "output"
+        output_dir.mkdir(parents=True)
+
+        # Real system profile this user config is based on.
+        manufacturer_dir = config.profiles_root / "Flashforge" / "machine"
+        manufacturer_dir.mkdir(parents=True)
+        system_profile = manufacturer_dir / "Test Printer 0.4 Nozzle.json"
+        system_profile.write_text('{"name": "Test Printer 0.4 Nozzle", "gcode_flavor": "klipper"}')
+        self._write_vendor_index(config.profiles_root, "Flashforge", "machine/Test Printer 0.4 Nozzle.json")
+
+        # The user-saved config: only carries the user's own override
+        # (bed_exclude_area) plus `inherits` naming the system profile —
+        # exactly what PrinterConfigDialog.tsx's buildSavePayload sends.
+        user_config_path = config.printer_configs_dir / "Test Printer 0.4 Nozzle - Copy.json"
+        user_config_path.write_text(
+            '{"inherits": "Test Printer 0.4 Nozzle", "bed_exclude_area": "1x1"}'
+        )
+
+        job = {
+            "file_ids": [],
+            "action": "slice",
+            "printer_profile_path": str(user_config_path.resolve()),
+        }
+
+        args = build_cli_args(job, config, {}, output_dir)
+
+        assert "--load-settings" in args
+        settings_idx = args.index("--load-settings")
+        resolved_path = Path(args[settings_idx + 1])
+        assert resolved_path.exists()
+
+        import json
+        resolved = json.loads(resolved_path.read_text())
+        # Inherited key from the system profile must be present...
+        assert resolved["gcode_flavor"] == "klipper"
+        # ...merged with the user's own override on top.
+        assert resolved["bed_exclude_area"] == "1x1"
+
+    def test_user_saved_printer_config_without_inherits_falls_back_to_raw_file(self, tmp_path):
+        """A user-saved config with no `inherits` (or one that can't be
+        found in any vendor index) should fall back to passing the raw
+        file through rather than failing the whole job."""
+        config = MockConfig(tmp_path)
+        output_dir = config.tmp_root / "jobs" / "j1" / "output"
+        output_dir.mkdir(parents=True)
+
+        user_config_path = config.printer_configs_dir / "Orphan Config.json"
+        user_config_path.write_text('{"bed_exclude_area": "2x2"}')
+
+        job = {
+            "file_ids": [],
+            "action": "slice",
+            "printer_profile_path": str(user_config_path.resolve()),
+        }
+
+        args = build_cli_args(job, config, {}, output_dir)
+
+        assert "--load-settings" in args
+        settings_idx = args.index("--load-settings")
+        resolved_path = Path(args[settings_idx + 1])
+        assert resolved_path.exists()
+
+        import json
+        resolved = json.loads(resolved_path.read_text())
+        assert resolved["bed_exclude_area"] == "2x2"
+
+    def test_user_saved_process_and_filament_configs_also_resolve(self, tmp_path):
+        """Same resolution mechanism must apply uniformly to process and
+        filament user-saved configs, not just printer configs."""
+        config = MockConfig(tmp_path)
+        output_dir = config.tmp_root / "jobs" / "j1" / "output"
+        output_dir.mkdir(parents=True)
+
+        process_config_path = config.process_configs_dir / "My Process - Copy.json"
+        process_config_path.write_text('{"layer_height": "0.3"}')
+
+        filament_config_path = config.filament_configs_dir / "My Filament - Copy.json"
+        filament_config_path.write_text('{"filament_type": "PETG"}')
+
+        job = {
+            "file_ids": [],
+            "action": "slice",
+            "process_profile_path": str(process_config_path.resolve()),
+            "filament_profile_paths": [str(filament_config_path.resolve())],
+        }
+
+        args = build_cli_args(job, config, {}, output_dir)
+
+        assert "--load-settings" in args
+        assert "--load-filaments" in args
+
+        import json
+        settings_idx = args.index("--load-settings")
+        process_resolved = json.loads(Path(args[settings_idx + 1]).read_text())
+        assert process_resolved["layer_height"] == "0.3"
+
+        filaments_idx = args.index("--load-filaments")
+        filament_resolved = json.loads(Path(args[filaments_idx + 1]).read_text())
+        assert filament_resolved["filament_type"] == "PETG"
 
 
 class TestBuildCliArgsParameterOverrides:

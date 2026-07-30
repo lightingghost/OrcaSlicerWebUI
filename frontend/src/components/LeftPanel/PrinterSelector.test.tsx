@@ -17,9 +17,16 @@ import { describe, it, expect, vi, beforeEach } from 'vitest';
 import { render, screen, waitFor, fireEvent } from '@testing-library/react';
 import { PrinterSelector } from './PrinterSelector';
 import { useStore } from '../../store';
+import { apiClient } from '../../api/client';
 
 vi.mock('../../store', () => ({
   useStore: vi.fn(),
+}));
+
+vi.mock('../../api/client', () => ({
+  apiClient: {
+    deletePrinterConfig: vi.fn().mockResolvedValue({ message: 'deleted' }),
+  },
 }));
 
 const mockSelectPrinterProfile = vi.fn();
@@ -28,6 +35,7 @@ const mockFetchAllProfiles = vi.fn().mockResolvedValue(undefined);
 const mockFetchUserPrinterConfigs = vi.fn().mockResolvedValue([]);
 const mockSaveUserConfig = vi.fn().mockResolvedValue(undefined);
 const mockSelectBedType = vi.fn();
+const mockClearSelectedPrinterProfile = vi.fn();
 
 const defaultState = {
   manufacturers: [],
@@ -44,6 +52,7 @@ const defaultState = {
   userPrinterConfigs: [],
   fetchUserPrinterConfigs: mockFetchUserPrinterConfigs,
   printerVariant: null,
+  clearSelectedPrinterProfile: mockClearSelectedPrinterProfile,
 };
 
 beforeEach(() => {
@@ -174,5 +183,86 @@ describe('PrinterSelector', () => {
     });
     render(<PrinterSelector />);
     expect(screen.getByTitle('Nozzle size')).toBeInTheDocument();
+  });
+
+  describe('deleting a saved printer config', () => {
+    const savedConfig = { name: 'My Custom Printer', path: '/workspace/printer/My Custom Printer.json', autosave: false };
+
+    async function openModalWithSavedConfig(extraState: Record<string, unknown> = {}) {
+      (useStore as any).mockReturnValue({
+        ...defaultState,
+        manufacturers: ['Bambu Lab'],
+        userPrinterConfigs: [savedConfig],
+        ...extraState,
+      });
+      render(<PrinterSelector />);
+      const openButton = screen.getByRole('button', { name: /🖨️/ });
+      await waitFor(() => expect(openButton).not.toBeDisabled());
+      fireEvent.click(openButton);
+      await waitFor(() => expect(screen.getByLabelText('Delete My Custom Printer')).toBeInTheDocument());
+    }
+
+    it('shows a delete button next to each saved config', async () => {
+      await openModalWithSavedConfig();
+      expect(screen.getByLabelText('Delete My Custom Printer')).toBeInTheDocument();
+    });
+
+    it('deletes the config via the API when confirmed', async () => {
+      vi.spyOn(window, 'confirm').mockReturnValue(true);
+      await openModalWithSavedConfig();
+
+      fireEvent.click(screen.getByLabelText('Delete My Custom Printer'));
+
+      await waitFor(() => {
+        expect(apiClient.deletePrinterConfig).toHaveBeenCalledWith('My Custom Printer');
+      });
+      expect(mockFetchUserPrinterConfigs).toHaveBeenCalled();
+    });
+
+    it('does not delete when the confirmation is cancelled', async () => {
+      vi.spyOn(window, 'confirm').mockReturnValue(false);
+      await openModalWithSavedConfig();
+
+      fireEvent.click(screen.getByLabelText('Delete My Custom Printer'));
+
+      expect(apiClient.deletePrinterConfig).not.toHaveBeenCalled();
+    });
+
+    it('clears the selection when the currently-selected config is deleted', async () => {
+      vi.spyOn(window, 'confirm').mockReturnValue(true);
+      await openModalWithSavedConfig({
+        selectedPrinterProfile: { name: 'My Custom Printer', path: savedConfig.path, category: 'machine', is_user: true },
+      });
+
+      fireEvent.click(screen.getByLabelText('Delete My Custom Printer'));
+
+      await waitFor(() => {
+        expect(mockClearSelectedPrinterProfile).toHaveBeenCalled();
+      });
+    });
+
+    it('does not clear the selection when a different config is deleted', async () => {
+      vi.spyOn(window, 'confirm').mockReturnValue(true);
+      await openModalWithSavedConfig({
+        selectedPrinterProfile: { name: 'Other Printer', path: '/workspace/printer/Other Printer.json', category: 'machine', is_user: true },
+      });
+
+      fireEvent.click(screen.getByLabelText('Delete My Custom Printer'));
+
+      await waitFor(() => {
+        expect(apiClient.deletePrinterConfig).toHaveBeenCalled();
+      });
+      expect(mockClearSelectedPrinterProfile).not.toHaveBeenCalled();
+    });
+
+    it('clicking delete does not also trigger selecting the config', async () => {
+      vi.spyOn(window, 'confirm').mockReturnValue(true);
+      await openModalWithSavedConfig();
+
+      fireEvent.click(screen.getByLabelText('Delete My Custom Printer'));
+
+      await waitFor(() => expect(apiClient.deletePrinterConfig).toHaveBeenCalled());
+      expect(mockSelectPrinterProfile).not.toHaveBeenCalled();
+    });
   });
 });

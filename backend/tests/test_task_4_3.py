@@ -173,10 +173,13 @@ def test_get_profile_content_process_category(client, auth_headers):
     process_profiles = [p for p in profiles if p["category"] == "process"]
     
     if process_profiles:
-        # Test retrieving the first process profile
+        # Test retrieving the first process profile — build the URL from
+        # manufacturer/category/filename (path is now an absolute
+        # filesystem path, not a URL-appendable relative segment — see
+        # profiles.py's ProfileEntry.path doc comment).
         profile = process_profiles[0]
         response = client.get(
-            f"/api/profiles/{profile['path']}",
+            f"/api/profiles/{profile['manufacturer']}/{profile['category']}/{profile['filename']}",
             headers=auth_headers
         )
         
@@ -205,7 +208,7 @@ def test_get_profile_content_filament_category(client, auth_headers):
         # Test retrieving the first filament profile
         profile = filament_profiles[0]
         response = client.get(
-            f"/api/profiles/{profile['path']}",
+            f"/api/profiles/{profile['manufacturer']}/{profile['category']}/{profile['filename']}",
             headers=auth_headers
         )
         

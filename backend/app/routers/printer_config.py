@@ -74,10 +74,50 @@ class AutosaveSaveRequest(BaseModel):
     config: dict[str, Any]
 
 
+ExternalCategory = Literal["machine", "process", "filament"]
+
+# Maps this module's internal category names (used for CRUD routes and
+# directory names — "printer") to the ProfileEntry-compatible category
+# literal the frontend/other backend consumers use everywhere else
+# ("machine") — see ConfigEntry's doc comment for why this exists.
+_EXTERNAL_CATEGORY: dict[str, ExternalCategory] = {
+    "printer": "machine",
+    "filament": "filament",
+    "process": "process",
+}
+
+
 class ConfigEntry(BaseModel):
+    """
+    A user-saved config entry (printer/filament/process), shaped
+    compatibly with profiles.py's ProfileEntry so the frontend can treat
+    a saved config exactly like a system profile everywhere it matters
+    (selection, job submission, printer/filament/process dialogs) without
+    a separate string-prefix convention (the old, now-removed "user:name"
+    scheme).
+
+    `path` is the ABSOLUTE filesystem path to the saved config's JSON
+    file under USER_WORKSPACE/{printer,filament,process}/ — this is what
+    gets sent as e.g. JobRequestModel.printer_profile_path; see
+    cli_builder.py's _resolve_profile_path_for_cli for how the backend
+    tells this apart from a system profile path (by checking which root
+    it falls under) and resolves it (via its own `inherits` name, looked
+    up across every manufacturer's vendor index).
+
+    `inherits` is the saved config's own `inherits` field (the name of
+    the SYSTEM profile it's based on), surfaced here so callers (e.g. the
+    process-config dropdown filtering by printer compatibility) can
+    determine compatibility WITHOUT fetching every saved config's full
+    JSON individually — a saved config has no `compatible_printers` of
+    its own; that only exists on the system profile it inherits from.
+    None if the config has no `inherits` field or it couldn't be read.
+    """
     name: str
     path: str
+    category: ExternalCategory
+    is_user: bool = True
     autosave: bool = False
+    inherits: str | None = None
 
 # Backward-compat alias
 PrinterConfigEntry = ConfigEntry
@@ -87,12 +127,34 @@ PrinterConfigEntry = ConfigEntry
 # Generic CRUD helpers (for category-specific explicit saves)
 # ---------------------------------------------------------------------------
 
+def _read_inherits(path: Path) -> str | None:
+    """Best-effort read of a saved config's own `inherits` field, without
+    raising — a config missing this field, or one that fails to parse,
+    simply has no known compatibility parent (treated as `None`, not an
+    error), since listing configs should never fail over one bad file."""
+    try:
+        with open(path, "r", encoding="utf-8") as f:
+            data = json.load(f)
+    except (json.JSONDecodeError, OSError):
+        return None
+    if not isinstance(data, dict):
+        return None
+    inherits = data.get("inherits")
+    return inherits if isinstance(inherits, str) else None
+
+
 def _list_configs(category: ConfigCategory) -> list[ConfigEntry]:
     d = _CATEGORY_DIR[category]()
     if not d.exists():
         return []
     return [
-        ConfigEntry(name=p.stem, path=p.stem, autosave=False)
+        ConfigEntry(
+            name=p.stem,
+            path=str(p.resolve()),
+            category=_EXTERNAL_CATEGORY[category],
+            autosave=False,
+            inherits=_read_inherits(p),
+        )
         for p in sorted(d.glob("*.json"))
     ]
 
@@ -122,7 +184,12 @@ def _save_config(category: ConfigCategory, body: ConfigSaveRequest) -> ConfigEnt
             json.dump(body.config, f, indent=2, ensure_ascii=False)
     except OSError as e:
         raise HTTPException(status_code=500, detail=f"Error writing file: {e}")
-    return ConfigEntry(name=safe, path=safe, autosave=False)
+    return ConfigEntry(
+        name=safe,
+        path=str(path.resolve()),
+        category=_EXTERNAL_CATEGORY[category],
+        autosave=False,
+    )
 
 
 def _delete_config(category: ConfigCategory, name: str) -> dict:
@@ -199,7 +266,13 @@ async def get_printer_config(name: str, autosave: bool = False) -> dict:
 async def save_printer_config(body: ConfigSaveRequest) -> ConfigEntry:
     if body.autosave:
         await save_autosave(body.name, AutosaveSaveRequest(config=body.config))
-        return ConfigEntry(name=_safe_filename(body.name), path=_safe_filename(body.name), autosave=True)
+        safe = _safe_filename(body.name)
+        return ConfigEntry(
+            name=safe,
+            path=str(_autosave_path(safe).resolve()),
+            category=_EXTERNAL_CATEGORY["printer"],
+            autosave=True,
+        )
     return _save_config("printer", body)
 
 @router.delete("/printer-configs/{name}")
@@ -227,7 +300,13 @@ async def get_filament_config(name: str, autosave: bool = False) -> dict:
 async def save_filament_config(body: ConfigSaveRequest) -> ConfigEntry:
     if body.autosave:
         await save_autosave(body.name, AutosaveSaveRequest(config=body.config))
-        return ConfigEntry(name=_safe_filename(body.name), path=_safe_filename(body.name), autosave=True)
+        safe = _safe_filename(body.name)
+        return ConfigEntry(
+            name=safe,
+            path=str(_autosave_path(safe).resolve()),
+            category=_EXTERNAL_CATEGORY["filament"],
+            autosave=True,
+        )
     return _save_config("filament", body)
 
 @router.delete("/filament-configs/{name}")
@@ -255,7 +334,13 @@ async def get_process_config_endpoint(name: str, autosave: bool = False) -> dict
 async def save_process_config(body: ConfigSaveRequest) -> ConfigEntry:
     if body.autosave:
         await save_autosave(body.name, AutosaveSaveRequest(config=body.config))
-        return ConfigEntry(name=_safe_filename(body.name), path=_safe_filename(body.name), autosave=True)
+        safe = _safe_filename(body.name)
+        return ConfigEntry(
+            name=safe,
+            path=str(_autosave_path(safe).resolve()),
+            category=_EXTERNAL_CATEGORY["process"],
+            autosave=True,
+        )
     return _save_config("process", body)
 
 @router.delete("/process-configs/{name}")

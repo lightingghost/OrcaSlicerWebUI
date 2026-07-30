@@ -45,17 +45,14 @@ RUN git clone --depth 1 --branch "v${ORCASLICER_VERSION}" \
 FROM python:3.11-slim AS json-gen
 WORKDIR /gen
 COPY --from=orca-source /src/OrcaSlicer ./OrcaSlicer
-COPY scripts/parameter_parser.py ./parameter_parser.py
-COPY scripts/extract_printer_config_options.py ./extract_printer_config_options.py
-COPY scripts/extract_filament_config_options.py ./extract_filament_config_options.py
-COPY docker/generate_parameters.py ./generate_parameters.py
+COPY scripts/ .
 
 RUN mkdir -p /gen/out/data && \
-    python3 generate_parameters.py /gen/OrcaSlicer /gen/out/data/parameters.json && \
-    python3 extract_printer_config_options.py \
+    python3 scripts/generate_parameters.py /gen/OrcaSlicer /gen/out/data/parameters.json && \
+    python3 scripts/extract_printer_config_options.py \
       --orca-root /gen/OrcaSlicer \
       --out /gen/out/data/printer_config_dialog_options.json && \
-    python3 extract_filament_config_options.py \
+    python3 scripts/extract_filament_config_options.py \
       --orca-root /gen/OrcaSlicer \
       --out /gen/out/data/filament_config_dialog_options.json && \
     rm -rf /gen/OrcaSlicer

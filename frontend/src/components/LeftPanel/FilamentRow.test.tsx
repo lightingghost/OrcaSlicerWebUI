@@ -10,9 +10,10 @@
  */
 
 import { describe, it, expect, vi, beforeEach } from 'vitest';
-import { render, screen, fireEvent } from '@testing-library/react';
+import { render, screen, fireEvent, waitFor } from '@testing-library/react';
 import { FilamentRow } from './FilamentRow';
 import { useStore } from '../../store';
+import { apiClient } from '../../api/client';
 
 vi.mock('../../store', () => ({
   useStore: vi.fn(),
@@ -27,6 +28,7 @@ vi.mock('../../api/client', () => ({
       filaments: [],
     }),
     listFilamentConfigs: vi.fn().mockResolvedValue([]),
+    deleteFilamentConfig: vi.fn().mockResolvedValue({ message: 'deleted' }),
   },
 }));
 
@@ -36,6 +38,8 @@ const mockFilamentProfiles = [
   { name: 'Generic PETG', path: 'BBL/filament/generic_petg.json', category: 'filament' as const },
 ];
 
+const mockRemoveSelectedFilamentProfileByPath = vi.fn();
+
 const baseState = {
   filamentProfiles: mockFilamentProfiles,
   selectedFilamentProfiles: [],
@@ -44,6 +48,7 @@ const baseState = {
   printerSystemName: null,
   toggleFilamentProfile: vi.fn(),
   saveUserConfig: vi.fn().mockResolvedValue(undefined),
+  removeSelectedFilamentProfileByPath: mockRemoveSelectedFilamentProfileByPath,
 };
 
 beforeEach(() => {
@@ -125,5 +130,66 @@ describe('FilamentRow', () => {
     // The aria-label is "Color: #8B8B8B" (default gray)
     const swatch = screen.getByLabelText(/Color:/);
     expect(swatch).toHaveStyle({ backgroundColor: '#8B8B8B' });
+  });
+
+  describe('deleting a saved filament config', () => {
+    const savedFilament = { name: 'My Filament', path: '/workspace/filament/My Filament.json', autosave: false };
+
+    async function openModalWithSavedFilament(extraState: Record<string, unknown> = {}) {
+      (apiClient.listFilamentConfigs as ReturnType<typeof vi.fn>).mockResolvedValue([savedFilament]);
+      (useStore as any).mockReturnValue({ ...baseState, ...extraState });
+      render(<FilamentRow />);
+      fireEvent.click(screen.getByLabelText('Add filament'));
+      await waitFor(() => expect(screen.getByLabelText('Delete My Filament')).toBeInTheDocument());
+    }
+
+    it('shows a delete button next to each saved filament config', async () => {
+      await openModalWithSavedFilament();
+    });
+
+    it('deletes the config via the API when confirmed', async () => {
+      vi.spyOn(window, 'confirm').mockReturnValue(true);
+      await openModalWithSavedFilament();
+
+      fireEvent.click(screen.getByLabelText('Delete My Filament'));
+
+      await waitFor(() => {
+        expect(apiClient.deleteFilamentConfig).toHaveBeenCalledWith('My Filament');
+      });
+    });
+
+    it('does not delete when the confirmation is cancelled', async () => {
+      vi.spyOn(window, 'confirm').mockReturnValue(false);
+      await openModalWithSavedFilament();
+
+      fireEvent.click(screen.getByLabelText('Delete My Filament'));
+
+      expect(apiClient.deleteFilamentConfig).not.toHaveBeenCalled();
+    });
+
+    it('removes it from the selected filaments when the currently-selected config is deleted', async () => {
+      vi.spyOn(window, 'confirm').mockReturnValue(true);
+      await openModalWithSavedFilament({
+        selectedFilamentProfiles: [{ name: 'My Filament', path: savedFilament.path, category: 'filament', is_user: true }],
+      });
+
+      fireEvent.click(screen.getByLabelText('Delete My Filament'));
+
+      await waitFor(() => {
+        expect(mockRemoveSelectedFilamentProfileByPath).toHaveBeenCalledWith(savedFilament.path);
+      });
+    });
+
+    it('does not touch the selection when a different filament is deleted', async () => {
+      vi.spyOn(window, 'confirm').mockReturnValue(true);
+      await openModalWithSavedFilament({
+        selectedFilamentProfiles: [{ name: 'Other Filament', path: '/workspace/filament/Other Filament.json', category: 'filament', is_user: true }],
+      });
+
+      fireEvent.click(screen.getByLabelText('Delete My Filament'));
+
+      await waitFor(() => expect(apiClient.deleteFilamentConfig).toHaveBeenCalled());
+      expect(mockRemoveSelectedFilamentProfileByPath).not.toHaveBeenCalled();
+    });
   });
 });

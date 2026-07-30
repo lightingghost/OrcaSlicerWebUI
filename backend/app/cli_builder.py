@@ -59,6 +59,20 @@ def resolve_and_guard(path: Path, root: Path) -> Path:
     return resolved
 
 
+def _is_within(path: Path, root: Path) -> bool:
+    """
+    Like resolve_and_guard's containment check, but returns a bool
+    instead of raising — used to CLASSIFY a profile path (system vs.
+    user-saved) before deciding which resolution strategy to run,
+    without treating "not under this particular root" as an error.
+    """
+    try:
+        path.resolve().relative_to(root.resolve())
+        return True
+    except (ValueError, OSError):
+        return False
+
+
 def _load_matching_autosave(
     autosave_dir: Path, name: str, profile_path_str: str
 ) -> dict[str, Any] | None:
@@ -100,6 +114,31 @@ def _load_matching_autosave(
     }
 
 
+def _write_resolved_profile_dict(
+    resolved: dict[str, Any],
+    category: str,
+    identifying_name: str,
+    output_dir: Path,
+) -> Path:
+    """
+    Write an already-merged/resolved profile dict as a temporary JSON file
+    inside the job's own output directory, returning its path — the
+    common tail end of both the system-profile and user-config resolution
+    paths in `_resolve_profile_path_for_cli` below.
+
+    Keeping the merged file next to the job's other outputs means it's
+    cleaned up automatically with the rest of the job's output directory,
+    matching the retention/cleanup lifecycle every other job artifact
+    already follows (see job_manager.py's output_dir handling).
+    """
+    resolved_dir = output_dir / "_resolved_profiles"
+    resolved_dir.mkdir(parents=True, exist_ok=True)
+    resolved_path = resolved_dir / f"{category}_{identifying_name}.json"
+    with open(resolved_path, "w", encoding="utf-8") as f:
+        json.dump(resolved, f)
+    return resolved_path
+
+
 def _write_resolved_profile(
     manufacturer: str,
     category: str,
@@ -109,12 +148,12 @@ def _write_resolved_profile(
     overlay: dict[str, Any] | None = None,
 ) -> Path:
     """
-    Resolve a profile's full `inherits` chain (via
+    Resolve a SYSTEM profile's full `inherits` chain (via
     `app.routers.profiles.resolve_profile_config`, the same logic backing
     the `/api/profiles/.../resolved` endpoint), optionally overlay a
     pending dialog autosave diff (`overlay` — see `_load_matching_autosave`)
-    on top of it, and write the merged, flattened result as a temporary
-    JSON file inside the job's own output directory, returning its path.
+    on top of it, and write the merged, flattened result via
+    `_write_resolved_profile_dict`, returning its path.
 
     The overlay lets Slice pick up in-progress Printer/Filament settings
     dialog edits that were autosaved but never explicitly "Save…"d as a
@@ -145,17 +184,72 @@ def _write_resolved_profile(
     if overlay:
         resolved = {**resolved, **overlay}
 
-    # Keep the merged file next to the job's other outputs so it's cleaned
-    # up automatically with the rest of the job's output directory,
-    # matching the retention/cleanup lifecycle every other job artifact
-    # already follows (see job_manager.py's output_dir handling).
-    resolved_dir = output_dir / "_resolved_profiles"
-    resolved_dir.mkdir(parents=True, exist_ok=True)
-    resolved_path = resolved_dir / f"{category}_{Path(filename).stem}.json"
-    with open(resolved_path, "w", encoding="utf-8") as f:
-        json.dump(resolved, f)
+    return _write_resolved_profile_dict(resolved, category, Path(filename).stem, output_dir)
 
-    return resolved_path
+
+def _resolve_user_profile_dict(
+    validated_path: Path,
+    category: str,
+    profiles_root: Path,
+) -> dict[str, Any] | None:
+    """
+    Resolve a user-saved config (see printer_config.py's ConfigEntry) to
+    its full effective configuration.
+
+    A user-saved config's JSON only carries the keys the user actually
+    changed plus an `inherits` field naming the SYSTEM profile it's based
+    on (by that profile's own `name`, e.g. "Flashforge Adventurer 5M 0.4
+    Nozzle" — see PrinterConfigDialog.tsx's `buildSavePayload`). To get
+    the full effective config the CLI needs, this:
+      1. looks up that name across every manufacturer's vendor index
+         (`app.routers.profiles.find_manufacturer_and_subpath_by_name`)
+         to find the real system profile file it was based on,
+      2. resolves THAT profile's own full `inherits` chain
+         (`resolve_profile_config` — same as any system profile), and
+      3. overlays the user config's own keys on top.
+
+    This exactly mirrors the frontend's own client-side resolution (see
+    PrinterConfigDialog.tsx's `doLoad`/profileSlice.ts's
+    `selectPrinterProfile`, both of which do this same 3-step lookup to
+    populate the settings dialog / parameter panel), so Slice sees the
+    identical effective config the UI displayed when the user saved it.
+
+    Returns None if the user config file can't be read/parsed as a JSON
+    object, so the caller can fall back to passing the raw file through
+    unresolved rather than failing the whole job.
+    """
+    from app.routers.profiles import (
+        find_manufacturer_and_subpath_by_name,
+        resolve_profile_config,
+    )
+
+    try:
+        with open(validated_path, "r", encoding="utf-8") as f:
+            user_config = json.load(f)
+    except (OSError, json.JSONDecodeError):
+        return None
+    if not isinstance(user_config, dict):
+        return None
+
+    base: dict[str, Any] = {}
+    inherits_name = user_config.get("inherits")
+    if inherits_name:
+        found = find_manufacturer_and_subpath_by_name(profiles_root, category, inherits_name)
+        if found:
+            manufacturer, sub_path = found
+            # sub_path is relative to the manufacturer dir, in the shape
+            # "{category}/{filename}" (see profiles.py's vendor index
+            # doc comment) — strip the leading category segment to get
+            # resolve_profile_config's own `filename` argument.
+            sub_path_parts = Path(sub_path).parts
+            if len(sub_path_parts) >= 2:
+                filename = str(Path(*sub_path_parts[1:]))
+                try:
+                    base = resolve_profile_config(profiles_root, manufacturer, category, filename)
+                except Exception:
+                    base = {}
+
+    return {**base, **user_config}
 
 
 def _resolve_profile_path_for_cli(
@@ -165,41 +259,84 @@ def _resolve_profile_path_for_cli(
     output_dir: Path,
     autosave_dir: Path | None = None,
     autosave_name: str | None = None,
+    user_config_dir: Path | None = None,
 ) -> Path:
     """
-    Given a profile path relative to profiles_root in the shape
-    `{manufacturer}/{category}/{filename}` (the shape every profile path
-    in this app uses — see profiles.py's directory layout), validate it
-    with resolve_and_guard and return the path to a fully inheritance-
-    resolved copy suitable for passing to the CLI's --load-settings/
-    --load-filaments. Falls back to the original (unresolved) path if the
-    profile isn't laid out in the expected manufacturer/category/filename
-    shape (e.g. a user-uploaded custom profile with no vendor index to
-    resolve `inherits` against), rather than failing the whole job.
+    Resolve a profile path (either a SYSTEM profile under `profiles_root`
+    or a user-saved config under `user_config_dir` — see
+    printer_config.py's ConfigEntry.path doc comment; both are the same
+    kind of string from this function's perspective now, an absolute
+    filesystem path, with no "user:"-style prefix to distinguish them) to
+    a fully inheritance-resolved copy suitable for passing to the CLI's
+    --load-settings/--load-filaments.
+
+    Classification is by CONTAINMENT, not string shape: the path is first
+    validated against `profiles_root` (this also transparently supports
+    legacy relative paths like "{manufacturer}/{category}/{filename}",
+    still used by a few tests/fixtures); only if that fails is it
+    validated against `user_config_dir` (when given). A path under
+    neither root raises ValueError, exactly like `resolve_and_guard`
+    would for a single root.
+
+    For a system profile, falls back to the original (unresolved) file
+    if it isn't laid out in the expected manufacturer/category/filename
+    shape relative to `profiles_root` (e.g. a legacy 2-segment test path
+    with no vendor index to resolve `inherits` against), rather than
+    failing the whole job. For a user-saved config, falls back to the
+    raw (unresolved) file if `_resolve_user_profile_dict` can't resolve
+    it for any reason (unreadable JSON, unknown `inherits` name, etc).
 
     When `autosave_dir`/`autosave_name` are given, also checks for a
     pending Printer/Filament settings dialog autosave for this exact
     profile (see `_load_matching_autosave`) and overlays it on top of the
     resolved config before writing the temp file — so Slice picks up
     in-progress dialog edits without requiring an explicit "Save…" first.
+    This applies to both system profiles and user-saved configs (editing
+    a saved custom printer config still autosaves the same way).
     """
-    # Validate the raw path stays within profiles_root first (same guard
-    # as before this function existed).
-    validated = resolve_and_guard(Path(profile_path_str), profiles_root)
+    raw_path = Path(profile_path_str)
 
-    parts = Path(profile_path_str).parts
-    if len(parts) < 3:
-        return validated
-
-    manufacturer = parts[0]
-    filename = str(Path(*parts[2:]))
+    try:
+        validated = resolve_and_guard(raw_path, profiles_root)
+        is_user_profile = False
+    except ValueError:
+        if user_config_dir is None:
+            raise
+        validated = resolve_and_guard(raw_path, user_config_dir)
+        is_user_profile = True
 
     overlay = None
     if autosave_dir is not None and autosave_name is not None:
         overlay = _load_matching_autosave(autosave_dir, autosave_name, profile_path_str)
 
+    if is_user_profile:
+        resolved = _resolve_user_profile_dict(validated, category, profiles_root)
+        if resolved is None:
+            return validated
+        if overlay:
+            resolved = {**resolved, **overlay}
+        try:
+            return _write_resolved_profile_dict(resolved, category, validated.stem, output_dir)
+        except Exception:
+            return validated
+
+    # System profile: derive manufacturer/filename from the VALIDATED,
+    # already-resolved path's position relative to profiles_root (works
+    # whether profile_path_str itself was absolute or relative) rather
+    # than re-parsing the raw input string.
     try:
-        resolved_path = _write_resolved_profile(
+        rel_parts = validated.relative_to(profiles_root.resolve()).parts
+    except ValueError:
+        rel_parts = ()
+
+    if len(rel_parts) < 3:
+        return validated
+
+    manufacturer = rel_parts[0]
+    filename = str(Path(*rel_parts[2:]))
+
+    try:
+        return _write_resolved_profile(
             manufacturer, category, filename, profiles_root, output_dir, overlay=overlay
         )
     except Exception:
@@ -208,8 +345,6 @@ def _resolve_profile_path_for_cli(
         # than blocking the whole job — the CLI will at least get
         # whatever keys the raw file itself declares.
         return validated
-
-    return resolved_path
 
 
 def build_cli_args(
@@ -310,6 +445,9 @@ def build_cli_args(
     # below instead, which is already live (read directly from in-memory
     # store state, never stale) and would double-apply if overlaid here too.
     autosave_dir = getattr(config, "autosave_dir", None)
+    printer_configs_dir = getattr(config, "printer_configs_dir", None)
+    process_configs_dir = getattr(config, "process_configs_dir", None)
+    filament_configs_dir = getattr(config, "filament_configs_dir", None)
 
     load_settings_paths: list[str] = []
     printer_path_str = job.get("printer_profile_path")
@@ -317,13 +455,15 @@ def build_cli_args(
         printer_path = _resolve_profile_path_for_cli(
             printer_path_str, "machine", profiles_root, output_dir,
             autosave_dir=autosave_dir, autosave_name="printer_config",
+            user_config_dir=printer_configs_dir,
         )
         load_settings_paths.append(str(printer_path))
     
     process_path_str = job.get("process_profile_path")
     if process_path_str:
         process_path = _resolve_profile_path_for_cli(
-            process_path_str, "process", profiles_root, output_dir
+            process_path_str, "process", profiles_root, output_dir,
+            user_config_dir=process_configs_dir,
         )
         load_settings_paths.append(str(process_path))
     
@@ -340,6 +480,7 @@ def build_cli_args(
         str(_resolve_profile_path_for_cli(
             fp_str, "filament", profiles_root, output_dir,
             autosave_dir=autosave_dir, autosave_name=f"filament_{idx + 1}",
+            user_config_dir=filament_configs_dir,
         ))
         for idx, fp_str in enumerate(filament_paths)
     ]
