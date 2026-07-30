@@ -17,6 +17,8 @@ from fastapi.middleware.cors import CORSMiddleware
 from fastapi.staticfiles import StaticFiles
 from fastapi.responses import FileResponse
 
+from app import __version__
+
 
 class JSONFormatter(logging.Formatter):
     """
@@ -188,7 +190,7 @@ async def lifespan(app: FastAPI) -> AsyncIterator[None]:
 app = FastAPI(
     title="OrcaSlicer Web UI API",
     description="REST API and WebSocket server for browser-based OrcaSlicer CLI interaction",
-    version="0.1.0",
+    version=__version__,
     lifespan=lifespan,
 )
 
@@ -226,6 +228,14 @@ async def health_check():
 
     return {
         "status": status,
+        # Sourced from app.__version__ (backend/app/__init__.py, itself
+        # kept in sync with pyproject.toml's `version` — see that file's
+        # own comment) rather than `app.version` above, so this stays
+        # correct even if FastAPI's own app.version is ever repurposed
+        # for OpenAPI-doc versioning instead of the app's actual release
+        # version. Displayed in JobOptionsModal.tsx alongside the
+        # frontend's own build-time __APP_VERSION__.
+        "version": __version__,
         "cli_available": cli_available,
         "cli_path": settings.orca_cli_path,
         "workspace_accessible": workspace_accessible,

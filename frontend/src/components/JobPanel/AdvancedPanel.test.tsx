@@ -9,39 +9,18 @@ describe('AdvancedPanel', () => {
     useStore.getState().resetMisc?.();
   });
 
-  it('renders collapsed by default', () => {
+  it('always shows the advanced option fields, with no expand/collapse toggle', () => {
     render(<AdvancedPanel />);
     expect(screen.getByText('Advanced Options')).toBeInTheDocument();
-    expect(screen.queryByLabelText('Data Directory')).not.toBeInTheDocument();
-  });
-
-  it('expands when clicked', () => {
-    render(<AdvancedPanel />);
-    const button = screen.getByRole('button', { name: /advanced options/i });
-    fireEvent.click(button);
-    
+    // No toggle button — the heading is now a plain heading, not a button.
+    expect(screen.queryByRole('button', { name: /advanced options/i })).not.toBeInTheDocument();
     expect(screen.getByLabelText('Data Directory')).toBeInTheDocument();
     expect(screen.getByLabelText('Debug Level')).toBeInTheDocument();
   });
 
-  it('collapses when clicked again', () => {
-    render(<AdvancedPanel />);
-    const button = screen.getByRole('button', { name: /advanced options/i });
-    
-    // Expand
-    fireEvent.click(button);
-    expect(screen.getByLabelText('Data Directory')).toBeInTheDocument();
-    
-    // Collapse
-    fireEvent.click(button);
-    expect(screen.queryByLabelText('Data Directory')).not.toBeInTheDocument();
-  });
-
   it('updates datadir in store when text input changes', async () => {
     render(<AdvancedPanel />);
-    const button = screen.getByRole('button', { name: /advanced options/i });
-    fireEvent.click(button);
-    
+
     const input = screen.getByLabelText('Data Directory') as HTMLInputElement;
     fireEvent.change(input, { target: { value: '/custom/path' } });
     
@@ -52,9 +31,7 @@ describe('AdvancedPanel', () => {
 
   it('updates debug level in store when dropdown changes', async () => {
     render(<AdvancedPanel />);
-    const button = screen.getByRole('button', { name: /advanced options/i });
-    fireEvent.click(button);
-    
+
     const select = screen.getByLabelText('Debug Level') as HTMLSelectElement;
     fireEvent.change(select, { target: { value: '3' } });
     
@@ -65,9 +42,7 @@ describe('AdvancedPanel', () => {
 
   it('validates skip_objects input and shows error for invalid integers', async () => {
     render(<AdvancedPanel />);
-    const button = screen.getByRole('button', { name: /advanced options/i });
-    fireEvent.click(button);
-    
+
     const input = screen.getByLabelText('Skip Objects') as HTMLInputElement;
     
     // Enter invalid value
@@ -80,9 +55,7 @@ describe('AdvancedPanel', () => {
 
   it('validates skip_objects input and accepts valid positive integers', async () => {
     render(<AdvancedPanel />);
-    const button = screen.getByRole('button', { name: /advanced options/i });
-    fireEvent.click(button);
-    
+
     const input = screen.getByLabelText('Skip Objects') as HTMLInputElement;
     
     // Enter valid value
@@ -96,9 +69,7 @@ describe('AdvancedPanel', () => {
 
   it('rejects zero and negative integers in skip_objects', async () => {
     render(<AdvancedPanel />);
-    const button = screen.getByRole('button', { name: /advanced options/i });
-    fireEvent.click(button);
-    
+
     const input = screen.getByLabelText('Skip Objects') as HTMLInputElement;
     
     // Enter zero
@@ -118,9 +89,7 @@ describe('AdvancedPanel', () => {
 
   it('updates boolean flags in store when checkboxes change', async () => {
     render(<AdvancedPanel />);
-    const button = screen.getByRole('button', { name: /advanced options/i });
-    fireEvent.click(button);
-    
+
     const checkbox = screen.getByLabelText('Allow Newer File') as HTMLInputElement;
     expect(checkbox.checked).toBe(false);
     
@@ -133,9 +102,7 @@ describe('AdvancedPanel', () => {
 
   it('renders all boolean flag checkboxes', () => {
     render(<AdvancedPanel />);
-    const button = screen.getByRole('button', { name: /advanced options/i });
-    fireEvent.click(button);
-    
+
     expect(screen.getByLabelText('Allow Newer File')).toBeInTheDocument();
     expect(screen.getByLabelText('Allow Mixed Temperature')).toBeInTheDocument();
     expect(screen.getByLabelText('Skip Modified G-codes')).toBeInTheDocument();
@@ -145,9 +112,7 @@ describe('AdvancedPanel', () => {
 
   it('validates clone_objects input correctly', async () => {
     render(<AdvancedPanel />);
-    const button = screen.getByRole('button', { name: /advanced options/i });
-    fireEvent.click(button);
-    
+
     const input = screen.getByLabelText('Clone Objects') as HTMLInputElement;
     
     // Valid input
@@ -161,9 +126,7 @@ describe('AdvancedPanel', () => {
 
   it('validates load_filament_ids input correctly', async () => {
     render(<AdvancedPanel />);
-    const button = screen.getByRole('button', { name: /advanced options/i });
-    fireEvent.click(button);
-    
+
     const input = screen.getByLabelText('Load Filament IDs') as HTMLInputElement;
     
     // Valid input
@@ -177,9 +140,7 @@ describe('AdvancedPanel', () => {
 
   it('handles empty comma-separated inputs correctly', async () => {
     render(<AdvancedPanel />);
-    const button = screen.getByRole('button', { name: /advanced options/i });
-    fireEvent.click(button);
-    
+
     const input = screen.getByLabelText('Skip Objects') as HTMLInputElement;
     
     // Empty input should clear the array
@@ -193,9 +154,7 @@ describe('AdvancedPanel', () => {
 
   it('trims whitespace in comma-separated inputs', async () => {
     render(<AdvancedPanel />);
-    const button = screen.getByRole('button', { name: /advanced options/i });
-    fireEvent.click(button);
-    
+
     const input = screen.getByLabelText('Skip Objects') as HTMLInputElement;
     
     // Input with extra whitespace

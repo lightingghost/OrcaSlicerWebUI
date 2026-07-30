@@ -71,10 +71,15 @@ def test_client(mock_cleanup_module, mock_database_module, mock_auth_module, moc
 def test_app_instantiation():
     """Test that the FastAPI app is instantiated with correct metadata."""
     from app.main import app
-    
+    from app import __version__
+
     assert app.title == "OrcaSlicer Web UI API"
     assert app.description == "REST API and WebSocket server for browser-based OrcaSlicer CLI interaction"
-    assert app.version == "0.1.0"
+    # app.version is sourced from app.__version__ (backend/app/__init__.py,
+    # kept in sync with pyproject.toml) rather than a hardcoded literal —
+    # asserting against that same source, not "0.1.0" directly, so this
+    # test doesn't need updating every time the version is bumped.
+    assert app.version == __version__
 
 
 def test_cors_middleware_configured():
@@ -123,6 +128,9 @@ def test_health_endpoint_healthy(test_client, tmp_path):
     assert data["workspace_root"] == str(workspace_path)
     assert data["tmp_accessible"] is True
     assert data["tmp_root"] == str(tmp_root_path)
+
+    from app import __version__
+    assert data["version"] == __version__
 
 
 def test_health_endpoint_degraded_missing_cli(test_client, tmp_path):

@@ -5,7 +5,10 @@ import { MiscOptions } from '../../store/miscSlice';
 /**
  * AdvancedPanel Component
  * 
- * Collapsible drawer containing controls for all MiscOptions:
+ * Always-visible panel (no expand/collapse toggle — the Job Options
+ * dialog is already an on-demand, opt-in modal, so hiding these controls
+ * behind a second click just adds friction) containing controls for all
+ * MiscOptions:
  * - datadir: text input
  * - debug: dropdown (0-5)
  * - load_custom_gcodes: file upload
@@ -22,8 +25,6 @@ import { MiscOptions } from '../../store/miscSlice';
  * Validates: Requirements 10.1, 10.4
  */
 export const AdvancedPanel: React.FC = () => {
-  const [isOpen, setIsOpen] = useState(false);
-  
   const misc = useStore((state) => state.misc);
   const setMiscOption = useStore((state) => state.setMiscOption);
   const miscValidationErrors = useStore((state) => state.miscValidationErrors);
@@ -39,11 +40,6 @@ export const AdvancedPanel: React.FC = () => {
   const [cloneObjectsInput, setCloneObjectsInput] = useState(
     misc.clone_objects?.join(', ') || ''
   );
-
-  // Toggle drawer open/closed
-  const handleToggle = useCallback(() => {
-    setIsOpen((prev) => !prev);
-  }, []);
 
   // Handler for text input changes
   const handleTextChange = useCallback(
@@ -177,26 +173,16 @@ export const AdvancedPanel: React.FC = () => {
 
   return (
     <div className="bg-gray-800 rounded-lg">
-      {/* Collapsible Header */}
-      <button
-        onClick={handleToggle}
-        className="w-full flex items-center justify-between p-4 text-white hover:bg-gray-750 transition-colors rounded-lg"
-        aria-expanded={isOpen}
-      >
+      {/* Header — always shown, no expand/collapse toggle (the job
+          options dialog is opened on demand already, so hiding advanced
+          options behind a second click just adds friction for something
+          users open this dialog specifically to configure). */}
+      <div className="w-full flex items-center justify-between p-4 text-white">
         <h3 className="text-lg font-semibold">Advanced Options</h3>
-        <svg
-          className={`w-5 h-5 transition-transform duration-200 ${isOpen ? 'rotate-180' : ''}`}
-          fill="none"
-          stroke="currentColor"
-          viewBox="0 0 24 24"
-        >
-          <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M19 9l-7 7-7-7" />
-        </svg>
-      </button>
+      </div>
 
-      {/* Collapsible Content */}
-      {isOpen && (
-        <div className="p-4 pt-0 space-y-4">
+      {/* Content — always rendered */}
+      <div className="p-4 pt-0 space-y-4">
           {/* Data Directory */}
           <div>
             <label htmlFor="misc-datadir" className="block text-sm font-medium text-gray-300 mb-1">
@@ -396,8 +382,7 @@ export const AdvancedPanel: React.FC = () => {
               <span>Enable Timelapse</span>
             </label>
           </div>
-        </div>
-      )}
+      </div>
     </div>
   );
 };

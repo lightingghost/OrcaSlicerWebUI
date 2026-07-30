@@ -203,6 +203,10 @@ export interface OutputFileSummary {
 
 export interface HealthResponse {
   status: string;
+  /** Backend app version (backend/app/__init__.py's __version__, kept in
+   *  sync with pyproject.toml) — shown alongside the frontend's own
+   *  build-time version in JobOptionsModal.tsx. */
+  version: string;
   cli_available: boolean;
   workspace_accessible: boolean;
 }

@@ -1,9 +1,15 @@
-import React from 'react';
+import React, { useEffect, useState } from 'react';
 import { X } from 'lucide-react';
 import { ActionSelector } from './ActionSelector';
 import { TransformPanel } from './TransformPanel';
 import { AdvancedPanel } from './AdvancedPanel';
 import { SubmitButton } from './SubmitButton';
+import { apiClient } from '../../api/client';
+
+/** Frontend app version, baked in at build time from package.json (see
+ *  vite.config.ts's `define` block) — always known synchronously, unlike
+ *  the backend's own version below which requires a /health round trip. */
+const FRONTEND_VERSION = __APP_VERSION__;
 
 /**
  * JobOptionsModal Component
@@ -27,6 +33,19 @@ interface JobOptionsModalProps {
 }
 
 export const JobOptionsModal: React.FC<JobOptionsModalProps> = ({ isOpen, onClose }) => {
+  // Backend version isn't known until /health responds, so it starts as
+  // null and the header shows a "..." placeholder briefly rather than
+  // blocking the whole modal on this one request.
+  const [backendVersion, setBackendVersion] = useState<string | null>(null);
+
+  useEffect(() => {
+    if (!isOpen) return;
+    apiClient
+      .getHealth()
+      .then((health) => setBackendVersion(health.version))
+      .catch(() => setBackendVersion(null));
+  }, [isOpen]);
+
   if (!isOpen) return null;
 
   return (
@@ -39,7 +58,17 @@ export const JobOptionsModal: React.FC<JobOptionsModalProps> = ({ isOpen, onClos
       <div className="bg-gray-900 rounded-lg shadow-2xl border border-gray-700 w-full max-w-4xl max-h-[85vh] mx-6 flex flex-col">
         {/* Header */}
         <div className="flex items-center justify-between px-6 py-4 border-b border-gray-700 flex-shrink-0">
-          <h2 className="text-lg font-semibold text-white">Job Options</h2>
+          {/* Stacked (not inline with the title) so the version string
+              always has the full header width to render in — an inline
+              `items-baseline gap-3` layout got squeezed by the close
+              button next to it and visually truncated with "…" once the
+              backend version resolved and the line grew longer. */}
+          <div className="flex flex-col min-w-0">
+            <h2 className="text-lg font-semibold text-white">Job Options</h2>
+            <span className="text-xs text-gray-500 whitespace-nowrap" data-testid="app-versions">
+              frontend v{FRONTEND_VERSION} · backend v{backendVersion ?? '…'}
+            </span>
+          </div>
           <button
             onClick={onClose}
             className="text-gray-400 hover:text-white transition-colors"
