@@ -48,11 +48,11 @@ COPY --from=orca-source /src/OrcaSlicer ./OrcaSlicer
 COPY scripts/ .
 
 RUN mkdir -p /gen/out/data && \
-    python3 scripts/generate_parameters.py /gen/OrcaSlicer /gen/out/data/parameters.json && \
-    python3 scripts/extract_printer_config_options.py \
+    python3 generate_parameters.py /gen/OrcaSlicer /gen/out/data/parameters.json && \
+    python3 extract_printer_config_options.py \
       --orca-root /gen/OrcaSlicer \
       --out /gen/out/data/printer_config_dialog_options.json && \
-    python3 scripts/extract_filament_config_options.py \
+    python3 extract_filament_config_options.py \
       --orca-root /gen/OrcaSlicer \
       --out /gen/out/data/filament_config_dialog_options.json && \
     rm -rf /gen/OrcaSlicer
