@@ -1,5 +1,5 @@
 import { StateCreator } from 'zustand';
-import { parseGcode, ParsedGcode } from '../lib/gcodeParser';
+import { parseGcode, parseGcodeStream, ParsedGcode } from '../lib/gcodeParser';
 
 export type MainTab = 'prepare' | 'preview' | 'device';
 
@@ -81,8 +81,13 @@ export const createPreviewSlice: StateCreator<PreviewSlice> = (set, get) => ({
         throw new Error(`Failed to download gcode: ${response.status}`);
       }
 
-      const text = await response.text();
-      const parsed = parseGcode(text);
+      // Real fetch responses provide a ReadableStream. Parsing it as it
+      // arrives avoids response.text() and text.split('\n') both keeping a
+      // complete large gcode file in browser memory. The fallback keeps the
+      // method compatible with lightweight/mock Response implementations.
+      const parsed = response.body
+        ? await parseGcodeStream(response.body)
+        : parseGcode(await response.text());
       const lastLayerIndex = Math.max(0, parsed.layers.length - 1);
       const lastLayer = parsed.layers[lastLayerIndex];
       const lastLayerStepCount = lastLayer

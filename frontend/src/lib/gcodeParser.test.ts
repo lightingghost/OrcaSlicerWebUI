@@ -1,7 +1,9 @@
 import { describe, it, expect } from 'vitest';
 import sampleGcode from './__fixtures__/sample.gcode?raw';
 import {
+  MAX_RENDERED_PREVIEW_SEGMENTS,
   parseGcode,
+  parseGcodeStream,
   formatShortTime,
   formatDuration,
   formatFilamentMeters,
@@ -111,6 +113,43 @@ describe('parseGcode', () => {
     const resultAbsolute = parseGcode(absolute);
     const totalAbsolute = resultAbsolute.lineTypeStats.reduce((a, s) => a + s.filamentMm, 0);
     expect(totalAbsolute).toBeCloseTo(2, 5);
+  });
+
+  it('streams chunked gcode without changing the parsed result', async () => {
+    const bytes = new TextEncoder().encode(sampleGcode);
+    const stream = new ReadableStream<Uint8Array>({
+      start(controller) {
+        // Deliberately split inside lines and UTF-8 chunks, as a real HTTP
+        // response can do. The parser must carry an incomplete line forward.
+        for (let offset = 0; offset < bytes.length; offset += 137) {
+          controller.enqueue(bytes.slice(offset, offset + 137));
+        }
+        controller.close();
+      },
+    });
+
+    const streamed = await parseGcodeStream(stream);
+    const inMemory = parseGcode(sampleGcode);
+
+    expect(streamed.segments).toHaveLength(inMemory.segments.length);
+    expect(streamed.layers).toEqual(inMemory.layers);
+    expect(streamed.lineTypeStats).toEqual(inMemory.lineTypeStats);
+    expect(streamed.totalEstimation).toEqual(inMemory.totalEstimation);
+  });
+
+  it('bounds rendered toolpath storage while keeping full-file statistics', () => {
+    const sourceMoveCount = MAX_RENDERED_PREVIEW_SEGMENTS + 1;
+    const moves = Array.from(
+      { length: sourceMoveCount },
+      (_, index) => `G1 X${(index + 1) % 2} Y${(index + 1) % 2} E0.1 F1200`
+    );
+    const result = parseGcode(`M83\n;LAYER_CHANGE\n;TYPE:Inner wall\n${moves.join('\n')}\n`);
+
+    expect(result.sourceSegmentCount).toBe(sourceMoveCount);
+    expect(result.segments.length).toBeLessThanOrEqual(MAX_RENDERED_PREVIEW_SEGMENTS);
+    expect(result.previewSegmentStride).toBeGreaterThan(1);
+    expect(result.lineTypeStats.find((stat) => stat.role === 'Inner wall')?.filamentMm)
+      .toBeCloseTo(sourceMoveCount * 0.1, 5);
   });
 });
 

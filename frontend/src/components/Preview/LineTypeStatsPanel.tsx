@@ -61,6 +61,13 @@ export const LineTypeStatsPanel: React.FC = () => {
 
   return (
     <div className="flex flex-col text-sm text-gray-200 bg-gray-800 border border-gray-700 rounded-lg overflow-hidden">
+      {parsedGcode.previewSegmentStride > 1 && (
+        <div className="border-b border-amber-700/50 bg-amber-950/30 px-3 py-2 text-xs text-amber-200">
+          Large preview simplified: rendering one out of every {parsedGcode.previewSegmentStride} moves
+          ({parsedGcode.segments.length.toLocaleString()} of {parsedGcode.sourceSegmentCount.toLocaleString()}).
+          Statistics use the complete G-code.
+        </div>
+      )}
       {/* Line Type / Time / Length / Weight table. table-fixed + explicit
           column widths (rather than letting the browser size columns from
           content) so the rightmost visibility-toggle column can never get

@@ -110,6 +110,34 @@ export interface ParsedGcode {
   totalEstimation: TotalEstimation;
   segments: ToolpathSegment[];
   layers: LayerInfo[];
+  /** Number of moves seen in the source file, before preview sampling. */
+  sourceSegmentCount: number;
+  /**
+   * Every Nth source move retained for the 3D preview. A value of 1 means
+   * every move is rendered; larger values mean the preview was simplified
+   * to keep a very large print responsive.
+   */
+  previewSegmentStride: number;
+}
+
+/**
+ * A browser preview needs considerably more memory per move than the gcode
+ * file itself: the parsed object, color/position buffers, and WebGL buffers
+ * all coexist briefly. Keep that working set bounded for large plates. The
+ * line-type statistics are still accumulated from every source move.
+ */
+export const MAX_RENDERED_PREVIEW_SEGMENTS = 200_000;
+
+interface StoredToolpathSegment extends ToolpathSegment {
+  /** Used internally to adaptively and evenly downsample large previews. */
+  sourceSegmentIndex: number;
+}
+
+interface SourceLayerInfo {
+  startSourceSegmentIndex: number;
+  endSourceSegmentIndex: number;
+  z: number;
+  height: number;
 }
 
 /**
@@ -233,100 +261,81 @@ function parseAxisToken(token: string): number {
  * Parse a complete .gcode file (as text) into line-type statistics, travel
  * stats, total estimation figures, and per-layer toolpath segments.
  */
-export function parseGcode(text: string): ParsedGcode {
-  const lines = text.split('\n');
-
+class IncrementalGcodeParser {
   // Per-role accumulators for the stats table.
-  const roleFilamentMm = new Map<string, number>();
-  const roleTimeSeconds = new Map<string, number>();
-  let travelTimeSeconds = 0;
-  let travelDistanceMm = 0;
-  let travelMoveCount = 0;
+  private readonly roleFilamentMm = new Map<string, number>();
+  private readonly roleTimeSeconds = new Map<string, number>();
+  private travelTimeSeconds = 0;
+  private travelDistanceMm = 0;
+  private travelMoveCount = 0;
 
-  const segments: ToolpathSegment[] = [];
-  const layers: LayerInfo[] = [];
+  // The preview keeps a representative subset of the moves. Statistics are
+  // updated before this sampling, so they remain exact for the source file.
+  private segments: StoredToolpathSegment[] = [];
+  private readonly sourceLayers: SourceLayerInfo[] = [];
+  private sourceSegmentCount = 0;
+  private previewSegmentStride = 1;
 
   // Absolute machine state. OrcaSlicer's CLI output uses absolute X/Y/Z
   // positioning (G90, the default) and relative E distances (M83, seen in
   // the sample output's "use relative distances for extrusion" comment) —
   // handle both relative and absolute E defensively since some profiles
   // may emit M82 (absolute E) instead.
-  let x = 0;
-  let y = 0;
-  let z = 0;
-  let e = 0;
-  let relativeE = true;
-  let relativeXYZ = false;
-  let feedrateMmPerMin = 0; // last seen F value
-  let currentRole = 'Undefined';
-  let currentLayerIndex = -1;
-  let currentLayerHeight = 0;
-  let currentLayerStartSegment = 0;
-  let sawAnyLayerChange = false;
+  private x = 0;
+  private y = 0;
+  private z = 0;
+  private e = 0;
+  private relativeE = true;
+  private relativeXYZ = false;
+  private feedrateMmPerMin = 0;
+  private currentRole = 'Undefined';
+  private currentLayerIndex = -1;
+  private currentLayerHeight = 0;
+  private currentLayerStartSourceSegment = 0;
+  private sawAnyLayerChange = false;
 
-  const addFilament = (role: string, deltaMm: number) => {
-    roleFilamentMm.set(role, (roleFilamentMm.get(role) ?? 0) + deltaMm);
-  };
-  const addTime = (role: string, seconds: number) => {
-    roleTimeSeconds.set(role, (roleTimeSeconds.get(role) ?? 0) + seconds);
-  };
+  // Native footer values and configuration values, read while the file is
+  // streamed instead of making extra full-file passes after parsing.
+  private totalFilamentMm: number | null = null;
+  private totalFilamentG: number | null = null;
+  private cost: number | null = null;
+  private totalLayers: number | null = null;
+  private printTimeSeconds: number | null = null;
+  private firstLayerTimeSeconds: number | null = null;
+  private filamentDiameterMm = 1.75;
+  private filamentDensityGPerCm3 = 1.24;
 
-  const closeCurrentLayer = (endSegmentIndex: number) => {
-    if (currentLayerIndex < 0) return;
-    layers.push({
-      startSegmentIndex: currentLayerStartSegment,
-      endSegmentIndex,
-      z,
-      height: currentLayerHeight,
-    });
-  };
-
-  for (const rawLine of lines) {
+  processLine(rawLine: string): void {
     const line = rawLine.trim();
-    if (line.length === 0) continue;
+    if (line.length === 0) return;
 
     if (line.startsWith(';')) {
-      // Reserved tag comments (GCodeProcessor::Reserved_Tags_compatible).
-      if (line.startsWith(';TYPE:')) {
-        const role = line.slice(6).trim();
-        currentRole = KNOWN_ROLES.has(role) ? role : 'Custom';
-      } else if (line.startsWith(';LAYER_CHANGE')) {
-        closeCurrentLayer(segments.length);
-        currentLayerIndex += 1;
-        currentLayerStartSegment = segments.length;
-        sawAnyLayerChange = true;
-      } else if (line.startsWith(';HEIGHT:')) {
-        const h = parseFloat(line.slice(8).trim());
-        if (Number.isFinite(h)) currentLayerHeight = h;
-      } else if (line.startsWith(';Z:')) {
-        const zTag = parseFloat(line.slice(3).trim());
-        if (Number.isFinite(zTag)) z = zTag;
-      }
-      continue;
+      this.processComment(line);
+      return;
     }
 
     // Strip trailing inline comments (e.g. "M83 ; use relative ...").
     const codeOnly = line.split(';')[0].trim();
-    if (codeOnly.length === 0) continue;
+    if (codeOnly.length === 0) return;
 
     const tokens = codeOnly.split(/\s+/);
     const cmd = tokens[0].toUpperCase();
 
     if (cmd === 'G90') {
-      relativeXYZ = false;
-      continue;
+      this.relativeXYZ = false;
+      return;
     }
     if (cmd === 'G91') {
-      relativeXYZ = true;
-      continue;
+      this.relativeXYZ = true;
+      return;
     }
     if (cmd === 'M82') {
-      relativeE = false;
-      continue;
+      this.relativeE = false;
+      return;
     }
     if (cmd === 'M83') {
-      relativeE = true;
-      continue;
+      this.relativeE = true;
+      return;
     }
     if (cmd === 'G92') {
       // Reset axis position(s) without moving — most commonly "G92 E0".
@@ -334,19 +343,19 @@ export function parseGcode(text: string): ParsedGcode {
         const axis = tok[0]?.toUpperCase();
         const value = parseAxisToken(tok);
         if (!Number.isFinite(value)) continue;
-        if (axis === 'E') e = value;
-        else if (axis === 'X') x = value;
-        else if (axis === 'Y') y = value;
-        else if (axis === 'Z') z = value;
+        if (axis === 'E') this.e = value;
+        else if (axis === 'X') this.x = value;
+        else if (axis === 'Y') this.y = value;
+        else if (axis === 'Z') this.z = value;
       }
-      continue;
+      return;
     }
 
-    if (cmd !== 'G0' && cmd !== 'G1') continue;
+    if (cmd !== 'G0' && cmd !== 'G1') return;
 
-    const x0 = x;
-    const y0 = y;
-    const z0 = z;
+    const x0 = this.x;
+    const y0 = this.y;
+    const z0 = this.z;
     let hasXY = false;
     let deltaE = 0;
     let hasE = false;
@@ -358,41 +367,41 @@ export function parseGcode(text: string): ParsedGcode {
 
       switch (axis) {
         case 'X':
-          x = relativeXYZ ? x + value : value;
+          this.x = this.relativeXYZ ? this.x + value : value;
           hasXY = true;
           break;
         case 'Y':
-          y = relativeXYZ ? y + value : value;
+          this.y = this.relativeXYZ ? this.y + value : value;
           hasXY = true;
           break;
         case 'Z':
-          z = relativeXYZ ? z + value : value;
+          this.z = this.relativeXYZ ? this.z + value : value;
           break;
         case 'E':
           hasE = true;
-          if (relativeE) {
+          if (this.relativeE) {
             deltaE = value;
-            e += value;
+            this.e += value;
           } else {
-            deltaE = value - e;
-            e = value;
+            deltaE = value - this.e;
+            this.e = value;
           }
           break;
         case 'F':
-          feedrateMmPerMin = value;
+          this.feedrateMmPerMin = value;
           break;
         default:
           break;
       }
     }
 
-    const dx = x - x0;
-    const dy = y - y0;
-    const dz = z - z0;
+    const dx = this.x - x0;
+    const dy = this.y - y0;
+    const dz = this.z - z0;
     const distanceMm = Math.sqrt(dx * dx + dy * dy + dz * dz);
-    if (distanceMm === 0) continue;
+    if (distanceMm === 0) return;
 
-    const feedrateMmPerSec = feedrateMmPerMin > 0 ? feedrateMmPerMin / 60 : 0;
+    const feedrateMmPerSec = this.feedrateMmPerMin > 0 ? this.feedrateMmPerMin / 60 : 0;
     const durationSeconds = feedrateMmPerSec > 0 ? distanceMm / feedrateMmPerSec : 0;
 
     // Positive E delta with actual XY movement = an extrusion move.
@@ -402,142 +411,244 @@ export function parseGcode(text: string): ParsedGcode {
     const isExtrusion = hasE && deltaE > 0 && hasXY;
 
     if (isExtrusion) {
-      addFilament(currentRole, deltaE);
-      addTime(currentRole, durationSeconds);
-    } else if (hasXY && !isExtrusion) {
-      travelDistanceMm += distanceMm;
-      travelMoveCount += 1;
-      travelTimeSeconds += durationSeconds;
+      this.addFilament(this.currentRole, deltaE);
+      this.addTime(this.currentRole, durationSeconds);
+    } else if (hasXY) {
+      this.travelDistanceMm += distanceMm;
+      this.travelMoveCount += 1;
+      this.travelTimeSeconds += durationSeconds;
     }
 
-    segments.push({
+    const sourceSegmentIndex = this.sourceSegmentCount;
+    this.sourceSegmentCount += 1;
+    this.storePreviewSegment({
       x0,
       y0,
       z0,
-      x1: x,
-      y1: y,
-      z1: z,
-      role: isExtrusion ? currentRole : 'Travel',
+      x1: this.x,
+      y1: this.y,
+      z1: this.z,
+      role: isExtrusion ? this.currentRole : 'Travel',
       isExtrusion,
-      layerIndex: Math.max(currentLayerIndex, 0),
+      layerIndex: Math.max(this.currentLayerIndex, 0),
+      sourceSegmentIndex,
     });
   }
 
-  // Close the final layer (no trailing ;LAYER_CHANGE tag after the last one).
-  if (sawAnyLayerChange) {
-    closeCurrentLayer(segments.length);
-  } else if (segments.length > 0) {
-    // Degenerate/no layer tags found at all — treat the whole file as one layer.
-    layers.push({ startSegmentIndex: 0, endSegmentIndex: segments.length, z, height: currentLayerHeight });
+  finish(): ParsedGcode {
+    // Close the final layer (no trailing ;LAYER_CHANGE tag after the last one).
+    if (this.sawAnyLayerChange) {
+      this.closeCurrentLayer(this.sourceSegmentCount);
+    } else if (this.sourceSegmentCount > 0) {
+      // Degenerate/no layer tags found at all — treat the whole file as one layer.
+      this.sourceLayers.push({
+        startSourceSegmentIndex: 0,
+        endSourceSegmentIndex: this.sourceSegmentCount,
+        z: this.z,
+        height: this.currentLayerHeight,
+      });
+    }
+
+    const layers = this.sourceLayers.map((layer) => ({
+      startSegmentIndex: this.findPreviewIndex(layer.startSourceSegmentIndex),
+      endSegmentIndex: this.findPreviewIndex(layer.endSourceSegmentIndex),
+      z: layer.z,
+      height: layer.height,
+    }));
+
+    // Filament weight per role, derived from length via cross-section area x
+    // density — using the same filament_diameter/filament_density values the
+    // CLI itself printed into the config-dump footer, so results reconcile
+    // with the file's own totals rather than an arbitrary assumed diameter.
+    const crossSectionMm2 = filamentCrossSectionAreaMm2(this.filamentDiameterMm);
+    const totalTimeAllRoles =
+      Array.from(this.roleTimeSeconds.values()).reduce((a, b) => a + b, 0) + this.travelTimeSeconds;
+    const roleOrder = Array.from(KNOWN_ROLES);
+
+    const lineTypeStats: LineTypeStat[] = Array.from(this.roleFilamentMm.entries())
+      .filter(([, mm]) => mm > 0)
+      .map(([role, filamentMm]) => {
+        const timeSeconds = this.roleTimeSeconds.get(role) ?? 0;
+        const volumeMm3 = filamentMm * crossSectionMm2;
+        const filamentGrams = (volumeMm3 / 1000) * this.filamentDensityGPerCm3;
+        return {
+          role,
+          color: LINE_TYPE_COLORS[role] ?? LINE_TYPE_COLORS.Custom,
+          timeSeconds,
+          filamentMm,
+          filamentGrams,
+          usageFraction: totalTimeAllRoles > 0 ? timeSeconds / totalTimeAllRoles : 0,
+        };
+      })
+      // Native lists line types in a fixed role order (see role_to_string's
+      // enum declaration order), not by magnitude.
+      .sort((a, b) => roleOrder.indexOf(a.role) - roleOrder.indexOf(b.role));
+
+    const travelStat: TravelStat = {
+      timeSeconds: this.travelTimeSeconds,
+      usageFraction: totalTimeAllRoles > 0 ? this.travelTimeSeconds / totalTimeAllRoles : 0,
+      distanceMm: this.travelDistanceMm,
+      moveCount: this.travelMoveCount,
+    };
+
+    const totalEstimation: TotalEstimation = {
+      totalFilamentM: this.totalFilamentMm !== null ? this.totalFilamentMm / 1000 : null,
+      modelFilamentM: this.totalFilamentMm !== null ? this.totalFilamentMm / 1000 : null,
+      totalFilamentG: this.totalFilamentG,
+      cost: this.cost,
+      prepareTimeSeconds: this.firstLayerTimeSeconds,
+      modelPrintingTimeSeconds: this.printTimeSeconds,
+      totalTimeSeconds: this.printTimeSeconds,
+      totalLayers: this.totalLayers ?? (layers.length > 0 ? layers.length : null),
+    };
+
+    return {
+      lineTypeStats,
+      travelStat,
+      totalEstimation,
+      // StoredToolpathSegment is structurally compatible with ToolpathSegment.
+      // Keeping its source index avoids allocating a second 200k-object array.
+      segments: this.segments,
+      layers,
+      sourceSegmentCount: this.sourceSegmentCount,
+      previewSegmentStride: this.previewSegmentStride,
+    };
   }
 
-  // ---- Footer "Total estimation" values (native's own computed figures) ----
-  let totalFilamentMm: number | null = null;
-  let totalFilamentG: number | null = null;
-  let cost: number | null = null;
-  let totalLayers: number | null = null;
-  let printTimeSeconds: number | null = null;
-  let firstLayerTimeSeconds: number | null = null;
+  private processComment(line: string): void {
+    // Footer/config data can appear anywhere in the file. Capture it as each
+    // line arrives, so the streaming path never has to retain the full text.
+    let match = line.match(/^;\s*filament used \[mm\]\s*=\s*([\d.eE+-]+)/);
+    if (match) {
+      this.totalFilamentMm = parseFloat(match[1]);
+    } else if ((match = line.match(/^;\s*total filament used \[g\]\s*=\s*([\d.eE+-]+)/))) {
+      this.totalFilamentG = parseFloat(match[1]);
+    } else if ((match = line.match(/^;\s*total filament cost\s*=\s*([\d.eE+-]+)/))) {
+      this.cost = parseFloat(match[1]);
+    } else if ((match = line.match(/^;\s*total layers count\s*=\s*([\d.eE+-]+)/))) {
+      this.totalLayers = parseInt(match[1], 10);
+    } else if ((match = line.match(/^;\s*estimated printing time \([^)]*\)\s*=\s*(.+)$/))) {
+      this.printTimeSeconds = parseDurationToSeconds(match[1]);
+    } else if ((match = line.match(/^;\s*estimated first layer printing time \([^)]*\)\s*=\s*(.+)$/))) {
+      this.firstLayerTimeSeconds = parseDurationToSeconds(match[1]);
+    }
 
-  for (const rawLine of lines) {
-    const line = rawLine.trim();
-    if (!line.startsWith(';')) continue;
-
-    let m = line.match(/^;\s*filament used \[mm\]\s*=\s*([\d.eE+-]+)/);
-    if (m) {
-      totalFilamentMm = parseFloat(m[1]);
-      continue;
-    }
-    m = line.match(/^;\s*total filament used \[g\]\s*=\s*([\d.eE+-]+)/);
-    if (m) {
-      totalFilamentG = parseFloat(m[1]);
-      continue;
-    }
-    m = line.match(/^;\s*total filament cost\s*=\s*([\d.eE+-]+)/);
-    if (m) {
-      cost = parseFloat(m[1]);
-      continue;
-    }
-    m = line.match(/^;\s*total layers count\s*=\s*([\d.eE+-]+)/);
-    if (m) {
-      totalLayers = parseInt(m[1], 10);
-      continue;
-    }
-    m = line.match(/^;\s*estimated printing time \([^)]*\)\s*=\s*(.+)$/);
-    if (m) {
-      printTimeSeconds = parseDurationToSeconds(m[1]);
-      continue;
-    }
-    m = line.match(/^;\s*estimated first layer printing time \([^)]*\)\s*=\s*(.+)$/);
-    if (m) {
-      firstLayerTimeSeconds = parseDurationToSeconds(m[1]);
-      continue;
-    }
-  }
-
-  // Filament weight per role, derived from length via cross-section area x
-  // density — using the same filament_diameter/filament_density values the
-  // CLI itself printed into the config-dump footer, so results reconcile
-  // with the file's own totals rather than an arbitrary assumed diameter.
-  let filamentDiameterMm = 1.75;
-  let filamentDensityGPerCm3 = 1.24; // PLA-typical fallback if not found
-  for (const rawLine of lines) {
-    const line = rawLine.trim();
     const diameter = parseConfigNumber(line, 'filament_diameter');
-    if (diameter !== null && diameter > 0) filamentDiameterMm = diameter;
+    if (diameter !== null && diameter > 0) this.filamentDiameterMm = diameter;
     const density = parseConfigNumber(line, 'filament_density');
-    if (density !== null && density > 0) filamentDensityGPerCm3 = density;
+    if (density !== null && density > 0) this.filamentDensityGPerCm3 = density;
+
+    // Reserved tag comments (GCodeProcessor::Reserved_Tags_compatible).
+    if (line.startsWith(';TYPE:')) {
+      const role = line.slice(6).trim();
+      this.currentRole = KNOWN_ROLES.has(role) ? role : 'Custom';
+    } else if (line.startsWith(';LAYER_CHANGE')) {
+      this.closeCurrentLayer(this.sourceSegmentCount);
+      this.currentLayerIndex += 1;
+      this.currentLayerStartSourceSegment = this.sourceSegmentCount;
+      this.sawAnyLayerChange = true;
+    } else if (line.startsWith(';HEIGHT:')) {
+      const height = parseFloat(line.slice(8).trim());
+      if (Number.isFinite(height)) this.currentLayerHeight = height;
+    } else if (line.startsWith(';Z:')) {
+      const z = parseFloat(line.slice(3).trim());
+      if (Number.isFinite(z)) this.z = z;
+    }
   }
-  const crossSectionMm2 = filamentCrossSectionAreaMm2(filamentDiameterMm);
 
-  const totalTimeAllRoles =
-    Array.from(roleTimeSeconds.values()).reduce((a, b) => a + b, 0) + travelTimeSeconds;
+  private addFilament(role: string, deltaMm: number): void {
+    this.roleFilamentMm.set(role, (this.roleFilamentMm.get(role) ?? 0) + deltaMm);
+  }
 
-  const lineTypeStats: LineTypeStat[] = Array.from(roleFilamentMm.entries())
-    .filter(([, mm]) => mm > 0)
-    .map(([role, filamentMm]) => {
-      const timeSeconds = roleTimeSeconds.get(role) ?? 0;
-      const volumeMm3 = filamentMm * crossSectionMm2;
-      const filamentGrams = (volumeMm3 / 1000) * filamentDensityGPerCm3;
-      return {
-        role,
-        color: LINE_TYPE_COLORS[role] ?? LINE_TYPE_COLORS.Custom,
-        timeSeconds,
-        filamentMm,
-        filamentGrams,
-        usageFraction: totalTimeAllRoles > 0 ? timeSeconds / totalTimeAllRoles : 0,
-      };
-    })
-    // Native lists line types in a fixed role order (see role_to_string's
-    // enum declaration order), not by magnitude — approximate that by
-    // preserving KNOWN_ROLES iteration order.
-    .sort((a, b) => {
-      const order = Array.from(KNOWN_ROLES);
-      return order.indexOf(a.role) - order.indexOf(b.role);
+  private addTime(role: string, seconds: number): void {
+    this.roleTimeSeconds.set(role, (this.roleTimeSeconds.get(role) ?? 0) + seconds);
+  }
+
+  private closeCurrentLayer(endSourceSegmentIndex: number): void {
+    if (this.currentLayerIndex < 0) return;
+    this.sourceLayers.push({
+      startSourceSegmentIndex: this.currentLayerStartSourceSegment,
+      endSourceSegmentIndex,
+      z: this.z,
+      height: this.currentLayerHeight,
     });
+  }
 
-  const travelStat: TravelStat = {
-    timeSeconds: travelTimeSeconds,
-    usageFraction: totalTimeAllRoles > 0 ? travelTimeSeconds / totalTimeAllRoles : 0,
-    distanceMm: travelDistanceMm,
-    moveCount: travelMoveCount,
+  private storePreviewSegment(segment: StoredToolpathSegment): void {
+    // When the cap is reached, double the stride and retain the matching
+    // subset of already-seen moves. This keeps samples evenly distributed
+    // over the whole plate rather than showing only its earliest moves.
+    while (this.segments.length >= MAX_RENDERED_PREVIEW_SEGMENTS) {
+      this.previewSegmentStride *= 2;
+      this.segments = this.segments.filter(
+        (stored) => stored.sourceSegmentIndex % this.previewSegmentStride === 0
+      );
+    }
+
+    if (segment.sourceSegmentIndex % this.previewSegmentStride === 0) {
+      this.segments.push(segment);
+    }
+  }
+
+  /** Lower bound by source move index; retained preview segments stay ordered. */
+  private findPreviewIndex(sourceSegmentIndex: number): number {
+    let low = 0;
+    let high = this.segments.length;
+    while (low < high) {
+      const middle = low + Math.floor((high - low) / 2);
+      if (this.segments[middle].sourceSegmentIndex < sourceSegmentIndex) low = middle + 1;
+      else high = middle;
+    }
+    return low;
+  }
+}
+
+/**
+ * Parse a complete gcode string. Kept for tests and callers with an
+ * in-memory string; the browser preview uses parseGcodeStream below so a
+ * large response is never duplicated into a full string and line array.
+ */
+export function parseGcode(text: string): ParsedGcode {
+  const parser = new IncrementalGcodeParser();
+  for (const line of text.split('\n')) parser.processLine(line);
+  return parser.finish();
+}
+
+/**
+ * Parse a gcode HTTP response body incrementally. This avoids the previous
+ * response.text() -> split('\n') peak-memory spike that caused large plates
+ * to fail in the browser even though slicing had completed successfully.
+ */
+export async function parseGcodeStream(stream: ReadableStream<Uint8Array>): Promise<ParsedGcode> {
+  const parser = new IncrementalGcodeParser();
+  const reader = stream.getReader();
+  const decoder = new TextDecoder();
+  let pending = '';
+
+  const processDecodedChunk = (chunk: string) => {
+    pending += chunk;
+    let start = 0;
+    let newlineIndex = pending.indexOf('\n', start);
+    while (newlineIndex !== -1) {
+      parser.processLine(pending.slice(start, newlineIndex));
+      start = newlineIndex + 1;
+      newlineIndex = pending.indexOf('\n', start);
+    }
+    pending = pending.slice(start);
   };
 
-  const totalEstimation: TotalEstimation = {
-    totalFilamentM: totalFilamentMm !== null ? totalFilamentMm / 1000 : null,
-    modelFilamentM: totalFilamentMm !== null ? totalFilamentMm / 1000 : null,
-    totalFilamentG,
-    cost,
-    prepareTimeSeconds: firstLayerTimeSeconds,
-    modelPrintingTimeSeconds: printTimeSeconds,
-    totalTimeSeconds:
-      printTimeSeconds !== null
-        ? printTimeSeconds
-        : null,
-    totalLayers: totalLayers ?? (layers.length > 0 ? layers.length : null),
-  };
-
-  return { lineTypeStats, travelStat, totalEstimation, segments, layers };
+  try {
+    while (true) {
+      const { done, value } = await reader.read();
+      if (done) break;
+      if (value) processDecodedChunk(decoder.decode(value, { stream: true }));
+    }
+    processDecodedChunk(decoder.decode());
+    if (pending.length > 0) parser.processLine(pending);
+    return parser.finish();
+  } finally {
+    reader.releaseLock();
+  }
 }
 
 /** Format seconds as native's `short_time(get_time_dhms(...))` does for the

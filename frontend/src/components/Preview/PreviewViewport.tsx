@@ -3,17 +3,13 @@ import * as THREE from 'three';
 import { OrbitControls } from 'three/examples/jsm/controls/OrbitControls.js';
 import { useStore } from '../../store';
 import { buildPlateGrid } from '../../lib/buildPlateGrid';
-import { LINE_TYPE_COLORS, type ToolpathSegment } from '../../lib/gcodeParser';
+import { LINE_TYPE_COLORS } from '../../lib/gcodeParser';
 
 // Matches ThreeViewport's default bed size fallback and camera conventions
 // so the Preview tab's 3D view feels identical to the Prepare tab's.
 const DEFAULT_BED_SIZE = { width: 220, depth: 220 };
 const DEFAULT_CAMERA_DISTANCE = 424;
 const HOME_DIRECTION = new THREE.Vector3(0, -1, 1).normalize();
-
-function colorToThree([r, g, b]: [number, number, number]): THREE.Color {
-  return new THREE.Color(r / 255, g / 255, b / 255);
-}
 
 /**
  * PreviewViewport
@@ -315,31 +311,55 @@ export const PreviewViewport: React.FC = () => {
     // segments — matching native's layer + horizontal move sliders, which
     // "build up" the current layer incrementally while lower layers stay
     // complete.
-    const visibleEnd = layer.startSegmentIndex + currentStepIndex;
-    const segments: ToolpathSegment[] = parsedGcode.segments
-      .slice(0, Math.min(visibleEnd, parsedGcode.segments.length))
-      // Hide roles the user has toggled off in the stats panel (Travel
-      // hidden by default, matching native's Preview tab not drawing
-      // rapid non-extruding moves until explicitly enabled).
-      .filter((seg) => !hiddenRoles.has(seg.role));
+    const visibleEnd = Math.min(
+      layer.startSegmentIndex + currentStepIndex,
+      parsedGcode.segments.length
+    );
 
-    const positions: number[] = [];
-    const colors: number[] = [];
-
-    for (const seg of segments) {
-      const color = colorToThree(LINE_TYPE_COLORS[seg.role] ?? [128, 128, 128]);
-      positions.push(
-        seg.x0 + offsetX, seg.y0 + offsetY, seg.z0,
-        seg.x1 + offsetX, seg.y1 + offsetY, seg.z1
-      );
-      colors.push(color.r, color.g, color.b, color.r, color.g, color.b);
+    // Count first, then write directly into typed arrays. Building a sliced
+    // object array and two growable number arrays used several extra copies
+    // of the entire toolpath at once, which was enough to kill the browser
+    // renderer for large plates even after a successful download.
+    let visibleSegmentCount = 0;
+    for (let index = 0; index < visibleEnd; index += 1) {
+      if (!hiddenRoles.has(parsedGcode.segments[index].role)) visibleSegmentCount += 1;
     }
 
-    if (positions.length === 0) return;
+    if (visibleSegmentCount === 0) {
+      requestRenderRef.current();
+      return;
+    }
+
+    const positions = new Float32Array(visibleSegmentCount * 6);
+    const colors = new Float32Array(visibleSegmentCount * 6);
+    let arrayIndex = 0;
+
+    for (let index = 0; index < visibleEnd; index += 1) {
+      const seg = parsedGcode.segments[index];
+      if (hiddenRoles.has(seg.role)) continue;
+      const [red, green, blue] = LINE_TYPE_COLORS[seg.role] ?? [128, 128, 128];
+      const r = red / 255;
+      const g = green / 255;
+      const b = blue / 255;
+
+      positions[arrayIndex] = seg.x0 + offsetX;
+      positions[arrayIndex + 1] = seg.y0 + offsetY;
+      positions[arrayIndex + 2] = seg.z0;
+      positions[arrayIndex + 3] = seg.x1 + offsetX;
+      positions[arrayIndex + 4] = seg.y1 + offsetY;
+      positions[arrayIndex + 5] = seg.z1;
+      colors[arrayIndex] = r;
+      colors[arrayIndex + 1] = g;
+      colors[arrayIndex + 2] = b;
+      colors[arrayIndex + 3] = r;
+      colors[arrayIndex + 4] = g;
+      colors[arrayIndex + 5] = b;
+      arrayIndex += 6;
+    }
 
     const geometry = new THREE.BufferGeometry();
-    geometry.setAttribute('position', new THREE.Float32BufferAttribute(positions, 3));
-    geometry.setAttribute('color', new THREE.Float32BufferAttribute(colors, 3));
+    geometry.setAttribute('position', new THREE.BufferAttribute(positions, 3));
+    geometry.setAttribute('color', new THREE.BufferAttribute(colors, 3));
 
     const material = new THREE.LineBasicMaterial({ vertexColors: true });
     const lines = new THREE.LineSegments(geometry, material);
