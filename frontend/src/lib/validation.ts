@@ -95,10 +95,8 @@ export function validateParameter(
  * values get embedded directly into the plate snapshot 3mf's
  * Metadata/model_settings.config and read back by the CLI's own
  * `config.set_deserialize`, so they must already be in the CLI's native
- * string form (unlike the top-level `parameter_overrides`, which the
- * backend's cli_builder.py passes as `--flag=value` CLI arguments, where
- * a plain JS-toString'd boolean/number already happens to work for the
- * CLI's own command-line parser).
+ * string form. Top-level `parameter_overrides` follow the same rule and
+ * are normalized by the backend before it builds `--flag=value` arguments.
  */
 export function serializeParameterValueForCli(value: string | number | boolean): string {
   if (typeof value === 'boolean') {

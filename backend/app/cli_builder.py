@@ -73,6 +73,20 @@ def _is_within(path: Path, root: Path) -> bool:
         return False
 
 
+def _serialize_parameter_override_value(value: Any) -> str:
+    """Return an override in OrcaSlicer's native CLI value format.
+
+    Python renders booleans as ``True`` and ``False``, but OrcaSlicer's
+    ``ConfigOptionBool::deserialize`` only accepts ``1`` and ``0``. Passing
+    a Python boolean through ``str(value)`` therefore makes a toggle such as
+    ``enable_support`` appear to change in the web UI while leaving the
+    slicer's effective setting unchanged.
+    """
+    if isinstance(value, bool):
+        return "1" if value else "0"
+    return str(value)
+
+
 def _load_matching_autosave(
     autosave_dir: Path, name: str, profile_path_str: str
 ) -> dict[str, Any] | None:
@@ -509,7 +523,7 @@ def build_cli_args(
     for key, value in parameter_overrides.items():
         # Keys should already be validated against PARAM_ALLOWLIST
         cli_flag = key.replace("_", "-")
-        args.append(f"--{cli_flag}={value}")
+        args.append(f"--{cli_flag}={_serialize_parameter_override_value(value)}")
     
     # 6. Transform options
     transforms = job.get("transforms", {})

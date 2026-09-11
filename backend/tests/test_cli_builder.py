@@ -512,8 +512,13 @@ class TestBuildCliArgsParameterOverrides:
         assert "--infill_density=20" not in args
         assert "--support_enable=true" not in args
 
-    def test_numeric_parameter_values(self, tmp_path):
-        """Numeric parameter values should be properly formatted."""
+    def test_parameter_override_values_are_serialized_for_orcaslicer(self, tmp_path):
+        """Booleans must use OrcaSlicer's ``1``/``0`` representation.
+
+        ConfigOptionBool::deserialize rejects Python's ``True``/``False``
+        spellings, which previously made the Enable support checkbox a no-op
+        at slice time.
+        """
         config = MockConfig(tmp_path)
         session_dir = config.tmp_root / "sessions" / "s1"
         session_dir.mkdir(parents=True)
@@ -526,7 +531,8 @@ class TestBuildCliArgsParameterOverrides:
             "parameter_overrides": {
                 "temperature": 220,
                 "speed": 50.5,
-                "enabled": True,
+                "enable_support": True,
+                "spiral_mode": False,
             }
         }
         
@@ -534,7 +540,10 @@ class TestBuildCliArgsParameterOverrides:
         
         assert "--temperature=220" in args
         assert "--speed=50.5" in args
-        assert "--enabled=True" in args
+        assert "--enable-support=1" in args
+        assert "--spiral-mode=0" in args
+        assert "--enable-support=True" not in args
+        assert "--spiral-mode=False" not in args
 
     def test_multi_word_key_dash_conversion_regression(self, tmp_path):
         """Regression test for the bed-temperature bug: a multi-underscore
@@ -1424,7 +1433,8 @@ class TestParameterOverridePropertyTests:
             # ConfigOptionDef::cli_args, libslic3r/Config.cpp:238-254).
             for key, value in overrides.items():
                 cli_flag = key.replace("_", "-")
-                expected_arg = f"--{cli_flag}={value}"
+                serialized_value = "1" if value is True else "0" if value is False else value
+                expected_arg = f"--{cli_flag}={serialized_value}"
                 assert expected_arg in args, (
                     f"Expected {expected_arg!r} in CLI args for override {key}={value!r}"
                 )
