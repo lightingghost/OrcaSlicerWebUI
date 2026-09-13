@@ -219,10 +219,13 @@ export function layOnFace(mesh: THREE.Object3D, worldNormal: THREE.Vector3): voi
   dropToBed(mesh);
 }
 
-/** Translate the mesh in Z so its world-space bounding box minimum touches Z=0. */
+/** Translate the mesh in Z so its lowest world-space vertex touches Z=0. */
 export function dropToBed(mesh: THREE.Object3D): void {
   mesh.updateMatrixWorld(true);
-  const box = new THREE.Box3().setFromObject(mesh);
+  // Measure transformed vertices: rotating the local bounding box can put
+  // its corners below the actual surface, leaving sloped models floating.
+  const box = new THREE.Box3().setFromObject(mesh, true);
+  if (box.isEmpty()) return;
   const delta = -box.min.z;
   if (Math.abs(delta) > EPSILON) {
     mesh.position.z += delta;

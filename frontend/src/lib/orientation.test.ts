@@ -21,6 +21,39 @@ function makePlateMesh(): THREE.Mesh {
   return makeBoxMesh(50, 2, 50);
 }
 
+/** A wedge whose sloped face does not contain the corners of its bounding box. */
+function makeWedgeMesh(indexed = true): THREE.Mesh {
+  const geometry = new THREE.BufferGeometry();
+  geometry.setAttribute('position', new THREE.Float32BufferAttribute([
+    -40, -10, 0, 40, -10, 0, 40, -10, 20,
+    -40, 10, 0, 40, 10, 0, 40, 10, 20,
+  ], 3));
+  geometry.setIndex([
+    0, 1, 2, 3, 5, 4, // ends
+    0, 3, 4, 0, 4, 1, // bottom
+    1, 4, 5, 1, 5, 2, // vertical side
+    0, 2, 5, 0, 5, 3, // sloped face
+  ]);
+  return new THREE.Mesh(indexed ? geometry : geometry.toNonIndexed(), new THREE.MeshStandardMaterial());
+}
+
+function expectWedgeFaceOnBed(mesh: THREE.Mesh): void {
+  mesh.updateWorldMatrix(true, false);
+  for (const vertex of [
+    new THREE.Vector3(-40, -10, 0),
+    new THREE.Vector3(40, -10, 20),
+    new THREE.Vector3(40, 10, 20),
+    new THREE.Vector3(-40, 10, 0),
+  ]) {
+    expect(vertex.applyMatrix4(mesh.matrixWorld).z).toBeCloseTo(0, 5);
+  }
+  const positions = mesh.geometry.getAttribute('position');
+  for (let i = 0; i < positions.count; i++) {
+    const vertex = new THREE.Vector3().fromBufferAttribute(positions, i).applyMatrix4(mesh.matrixWorld);
+    expect(vertex.z).toBeGreaterThanOrEqual(-1e-6);
+  }
+}
+
 describe('collectFaceCandidates', () => {
   it('finds 6 grouped face candidates for an axis-aligned box', () => {
     const mesh = makeBoxMesh();
@@ -51,6 +84,42 @@ describe('collectFaceCandidates', () => {
 });
 
 describe('layOnFace', () => {
+  it.each([true, false])('places the actual sloped face on the plate (indexed: %s)', (indexed) => {
+    const mesh = makeWedgeMesh(indexed);
+    mesh.position.set(12, -8, 60);
+    mesh.rotation.set(0.3, -0.6, 0.2);
+    mesh.scale.set(1.5, 0.8, 2);
+    mesh.updateMatrixWorld(true);
+    const worldNormal = new THREE.Vector3(-1, 0, 4)
+      .applyMatrix3(new THREE.Matrix3().getNormalMatrix(mesh.matrixWorld)).normalize();
+
+    layOnFace(mesh, worldNormal);
+
+    expectWedgeFaceOnBed(mesh);
+    expect(mesh.position.x).toBe(12);
+    expect(mesh.position.y).toBe(-8);
+  });
+
+  it('places a sloped face on the plate when the model contains transformed child meshes', () => {
+    const group = new THREE.Group();
+    const mesh = makeWedgeMesh();
+    mesh.position.set(7, -3, 11);
+    mesh.rotation.set(-0.2, 0.5, 0.7);
+    mesh.scale.set(1.2, 0.7, 1.8);
+    group.add(mesh);
+    group.position.set(12, -8, 60);
+    group.rotation.set(0.3, -0.6, 0.2);
+    group.updateMatrixWorld(true);
+    const worldNormal = new THREE.Vector3(-1, 0, 4)
+      .applyMatrix3(new THREE.Matrix3().getNormalMatrix(mesh.matrixWorld)).normalize();
+
+    layOnFace(group, worldNormal);
+
+    expectWedgeFaceOnBed(mesh);
+    expect(group.position.x).toBe(12);
+    expect(group.position.y).toBe(-8);
+  });
+
   it('rotates the mesh so the given world normal points down, then drops to bed', () => {
     const mesh = makeBoxMesh(20, 10, 30);
     mesh.position.set(5, 5, 50);
@@ -80,6 +149,13 @@ describe('layOnFace', () => {
 });
 
 describe('dropToBed', () => {
+  it('leaves an object without vertices at its current position', () => {
+    const group = new THREE.Group();
+    group.position.set(3, 4, 55);
+    dropToBed(group);
+    expect(group.position.toArray()).toEqual([3, 4, 55]);
+  });
+
   it('translates the mesh so its minimum Z becomes 0', () => {
     const mesh = makeBoxMesh(10, 10, 10);
     mesh.position.set(3, 4, 55);
