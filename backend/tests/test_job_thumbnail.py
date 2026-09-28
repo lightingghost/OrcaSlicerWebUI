@@ -21,13 +21,15 @@ block, can we insert a block of comment to the gcode with orca slicer
 cli?"
 """
 
+import asyncio
 import json
 from unittest.mock import AsyncMock, patch
 
+import httpx
 import pytest
 from fastapi.testclient import TestClient
 
-from app.routers.jobs import _splice_thumbnail_into_gcode
+from app.routers.jobs import _StableFileResponse, _splice_thumbnail_into_gcode
 
 # Minimal valid 1x1 PNG (smallest possible PNG file, magic bytes + IHDR/
 # IDAT/IEND chunks for a 1x1 transparent pixel).
@@ -100,6 +102,44 @@ def test_upload_thumbnail_success(tmp_path):
             assert written.read_bytes() == _TINY_PNG
         finally:
             app.dependency_overrides.clear()
+
+
+def test_thumbnail_upload_and_gcode_download_over_asgi(tmp_path):
+    """Exercise the upload and download routes without a network server."""
+    output_dir = tmp_path / "output"
+    output_dir.mkdir()
+    gcode_path = output_dir / "plate_1.gcode"
+    gcode_path.write_bytes(b"; HEADER_BLOCK_END\n\nG1 X1\n")
+    app = _init_app({"status": "completed", "output_dir": str(output_dir)})
+
+    async def exercise_routes():
+        async with httpx.AsyncClient(
+            transport=httpx.ASGITransport(app=app), base_url="http://test"
+        ) as client:
+            headers = {"Authorization": "Bearer test-secret-12345"}
+            uploaded = await client.post(
+                "/api/jobs/test-job-id/thumbnail", headers=headers, content=_TINY_PNG
+            )
+            assert uploaded.status_code == 200
+            downloaded = await client.get(
+                "/api/jobs/test-job-id/outputs/plate_1.gcode", headers=headers
+            )
+            assert downloaded.status_code == 200
+            assert downloaded.content == gcode_path.read_bytes()
+            assert int(downloaded.headers["content-length"]) == len(downloaded.content)
+            ranged = await client.get(
+                "/api/jobs/test-job-id/outputs/plate_1.gcode",
+                headers={**headers, "Range": "bytes=0-9"},
+            )
+            assert ranged.status_code == 206
+            assert ranged.content == downloaded.content[:10]
+            assert ranged.headers["content-range"].startswith("bytes 0-9/")
+            assert list(output_dir.glob("*.download")) == []
+
+    try:
+        asyncio.run(exercise_routes())
+    finally:
+        app.dependency_overrides.clear()
 
 
 def test_upload_thumbnail_splices_block_into_existing_gcode(tmp_path):
@@ -238,6 +278,49 @@ class TestSpliceThumbnailIntoGcode:
         text = gcode_path.read_text()
         assert text.count("; THUMBNAIL_BLOCK_START") == 1
         assert "G1" in text
+
+    def test_in_flight_download_keeps_its_original_bytes(self, tmp_path):
+        """A thumbnail upload may finish while a large preview is streaming."""
+        gcode_path = tmp_path / "large.gcode"
+        original = (
+            b"; HEADER_BLOCK_START\n; HEADER_BLOCK_END\n\n"
+            + b"G1 X10 Y20 E1\n" * 150_000
+        )
+        gcode_path.write_bytes(original)
+
+        response = _StableFileResponse(gcode_path, gcode_path.name)
+        chunks = []
+        spliced = False
+
+        async def send(message):
+            nonlocal spliced
+            if message["type"] == "http.response.body":
+                chunks.append(message.get("body", b""))
+                if not spliced:
+                    _splice_thumbnail_into_gcode(gcode_path, _TINY_PNG)
+                    spliced = True
+
+        async def receive():
+            return {"type": "http.request", "body": b"", "more_body": False}
+
+        asyncio.run(response(
+            {"type": "http", "method": "GET", "headers": []}, receive, send
+        ))
+        downloaded = b"".join(chunks)
+
+        assert downloaded == original
+        assert int(response.headers["content-length"]) == len(downloaded)
+        assert b"; THUMBNAIL_BLOCK_START" in gcode_path.read_bytes()
+        assert not response._snapshot_path.exists()
+
+    def test_splice_preserves_non_utf8_gcode_bytes(self, tmp_path):
+        gcode_path = tmp_path / "plate_1.gcode"
+        original = b"; HEADER_BLOCK_END\n\n; comment \xff\xfe\nG1 X0\n"
+        gcode_path.write_bytes(original)
+
+        _splice_thumbnail_into_gcode(gcode_path, _TINY_PNG)
+
+        assert gcode_path.read_bytes().endswith(b"; comment \xff\xfe\nG1 X0\n")
 
 
 def test_upload_thumbnail_rejects_job_not_found():

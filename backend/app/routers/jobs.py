@@ -8,7 +8,11 @@ Requirements: 6.1, 6.5, 6.7, 7.4, 9.1, 9.2, 9.3, 9.4, 11.1, 11.4
 
 import base64
 import json
+import os
 import re
+import shutil
+import stat
+import tempfile
 import uuid
 from datetime import datetime
 from pathlib import Path
@@ -18,6 +22,7 @@ import aiosqlite
 from fastapi import APIRouter, Depends, HTTPException, Query, Request, status
 from fastapi.responses import FileResponse
 from pydantic import BaseModel, ConfigDict, Field, field_validator
+from starlette.concurrency import run_in_threadpool
 
 from app.auth import verify_token
 from app.cli_builder import resolve_and_guard
@@ -27,6 +32,35 @@ from app.routers.parameters import get_param_allowlist
 
 
 router = APIRouter(dependencies=[Depends(verify_token)])
+
+
+class _StableFileResponse(FileResponse):
+    """Give FileResponse a stable inode while a thumbnail upload replaces the output.
+
+    FileResponse stats a path before opening it. A private hard link pins the
+    current complete version through both operations, including range requests.
+    The link consumes no extra G-code storage and is removed after streaming.
+    """
+
+    def __init__(self, path: Path, filename: str):
+        self._snapshot_path = path.with_name(f".{path.name}.{uuid.uuid4().hex}.download")
+        os.link(path, self._snapshot_path)
+        try:
+            super().__init__(
+                path=self._snapshot_path,
+                filename=filename,
+                media_type="application/octet-stream",
+                stat_result=self._snapshot_path.stat(),
+            )
+        except BaseException:
+            self._snapshot_path.unlink(missing_ok=True)
+            raise
+
+    async def __call__(self, scope, receive, send):
+        try:
+            await super().__call__(scope, receive, send)
+        finally:
+            self._snapshot_path.unlink(missing_ok=True)
 
 
 # Request models using Pydantic v2 strict validation
@@ -708,7 +742,19 @@ async def upload_job_thumbnail(
     output_dir = Path(row["output_dir"])
     output_dir.mkdir(parents=True, exist_ok=True)
     thumbnail_path = resolve_and_guard(Path("thumbnail.png"), output_dir)
-    thumbnail_path.write_bytes(body)
+    # Publish the PNG as a complete file, even when an earlier thumbnail is
+    # being downloaded at the same time.
+    thumbnail_temp_path = None
+    try:
+        with tempfile.NamedTemporaryFile(
+            mode="wb", dir=output_dir, prefix=".thumbnail-", suffix=".tmp", delete=False
+        ) as thumbnail_temp:
+            thumbnail_temp_path = Path(thumbnail_temp.name)
+            thumbnail_temp.write(body)
+        os.replace(thumbnail_temp_path, thumbnail_path)
+    finally:
+        if thumbnail_temp_path is not None:
+            thumbnail_temp_path.unlink(missing_ok=True)
 
     output_file_id = str(uuid.uuid4())
     created_at = datetime.utcnow().isoformat()
@@ -739,7 +785,7 @@ async def upload_job_thumbnail(
     # what native's GCode.cpp `_do_export`/`export_thumbnails_to_file`
     # would have written, without needing the CLI to cooperate at all.
     for gcode_path in sorted(output_dir.glob("*.gcode")):
-        _splice_thumbnail_into_gcode(gcode_path, body)
+        await run_in_threadpool(_splice_thumbnail_into_gcode, gcode_path, body)
         # Splicing changes the file's size on disk — refresh the stored
         # size_bytes so GET /api/jobs/{id} and .../outputs report the
         # real (now-larger) size rather than a stale pre-splice value.
@@ -799,29 +845,69 @@ def _splice_thumbnail_into_gcode(gcode_path: Path, png_bytes: bytes) -> None:
 
     block = "; THUMBNAIL_BLOCK_START\n;\n" + "\n".join(lines) + "\n; THUMBNAIL_BLOCK_END\n\n"
 
-    text = gcode_path.read_text(encoding="utf-8", errors="replace")
+    block_bytes = block.encode("ascii")
+    header_end = b"; HEADER_BLOCK_END"
+    thumbnail_start = b"; THUMBNAIL_BLOCK_START"
+    thumbnail_end = b"; THUMBNAIL_BLOCK_END"
+    temp_path = None
 
-    # Strip any previously-spliced block first, so re-uploading doesn't
-    # accumulate duplicates.
-    text = re.sub(
-        r"; THUMBNAIL_BLOCK_START\n.*?; THUMBNAIL_BLOCK_END\n\n?",
-        "",
-        text,
-        flags=re.DOTALL,
-    )
+    # Copy bytes instead of decoding the whole G-code into memory. Keep the
+    # old inode untouched until the new file is complete: readers already
+    # streaming it can finish while new readers see the updated thumbnail.
+    try:
+        with gcode_path.open("rb") as source:
+            has_header = any(line.rstrip(b"\r\n") == header_end for line in source)
+            source.seek(0)
 
-    header_end_marker = "; HEADER_BLOCK_END\n"
-    idx = text.find(header_end_marker)
-    if idx == -1:
-        # No recognizable header block (unexpected gcode shape) — fall
-        # back to prepending, so the thumbnail still ends up in the file
-        # rather than silently being dropped.
-        new_text = block + text
-    else:
-        insert_at = idx + len(header_end_marker)
-        new_text = text[:insert_at] + "\n" + block + text[insert_at:]
+            with tempfile.NamedTemporaryFile(
+                mode="wb", dir=gcode_path.parent,
+                prefix=f".{gcode_path.name}-", suffix=".tmp", delete=False,
+            ) as target:
+                temp_path = Path(target.name)
+                os.fchmod(target.fileno(), stat.S_IMODE(os.fstat(source.fileno()).st_mode))
+                if not has_header:
+                    target.write(block_bytes)
 
-    gcode_path.write_text(new_text, encoding="utf-8")
+                inserted = False
+                in_old_block = False
+                skip_blank_after_block = False
+                old_block_start = 0
+                source_offset = 0
+                while True:
+                    line_start = source_offset
+                    line = source.readline()
+                    source_offset += len(line)
+                    if not line:
+                        # An unterminated old block is not safe to discard.
+                        if in_old_block:
+                            source.seek(old_block_start)
+                            shutil.copyfileobj(source, target)
+                        break
+
+                    marker = line.rstrip(b"\r\n")
+                    if in_old_block:
+                        if marker == thumbnail_end:
+                            in_old_block = False
+                            skip_blank_after_block = True
+                        continue
+                    if marker == thumbnail_start:
+                        in_old_block = True
+                        old_block_start = line_start
+                        continue
+                    if skip_blank_after_block:
+                        skip_blank_after_block = False
+                        if marker == b"":
+                            continue
+
+                    target.write(line)
+                    if has_header and not inserted and marker == header_end:
+                        target.write(b"\n" + block_bytes)
+                        inserted = True
+
+        os.replace(temp_path, gcode_path)
+    finally:
+        if temp_path is not None:
+            temp_path.unlink(missing_ok=True)
 
 
 @router.get("/jobs/{job_id}/outputs/{filename}")
@@ -843,7 +929,7 @@ async def download_output_file(
         db: Database connection (injected)
     
     Returns:
-        FileResponse: Streaming file download with Content-Disposition: attachment
+        FileResponse: File download with Content-Disposition: attachment
     
     Raises:
         HTTPException 404: Job not found, file not found, or file expired
@@ -903,16 +989,15 @@ async def download_output_file(
             detail=f"Output path is not a file: {filename}"
         )
     
-    # Step 4: Return the file as a streaming download response
-    # FileResponse automatically handles streaming and sets proper headers
-    return FileResponse(
-        path=str(file_path),
-        filename=filename,
-        media_type="application/octet-stream",
-        headers={
-            "Content-Disposition": f'attachment; filename="{filename}"'
-        }
-    )
+    # A private hard link pins the file version used for response headers
+    # and streaming even if a thumbnail upload replaces the original path.
+    try:
+        return _StableFileResponse(file_path, filename)
+    except FileNotFoundError:
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND,
+            detail=f"Output file not found or expired: {filename}",
+        ) from None
 
 
 @router.delete("/jobs/{job_id}")
