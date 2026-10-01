@@ -35,6 +35,8 @@ import { PrintDialog } from '../Device/PrintDialog';
 import { serializeParameterValueForCli } from '../../lib/validation';
 
 interface TopBarProps {
+  /** Wrap onto multiple rows on phones (see Layout.tsx). */
+  compact?: boolean;
   activeTab?: MainTab;
   onTabChange?: (tab: MainTab) => void;
 }
@@ -42,6 +44,7 @@ interface TopBarProps {
 export const TopBar: React.FC<TopBarProps> = ({
   activeTab = 'prepare',
   onTabChange,
+  compact = false,
 }) => {
   const [showJobOptions, setShowJobOptions] = useState(false);
   const [showPrintDialog, setShowPrintDialog] = useState(false);
@@ -207,7 +210,7 @@ export const TopBar: React.FC<TopBarProps> = ({
   };
 
   return (
-    <header className="bg-gray-800 border-b border-gray-700 h-16 flex items-center px-4 gap-6">
+    <header className={`bg-gray-800 border-b border-gray-700 flex items-center ${compact ? 'flex-wrap gap-x-3 gap-y-2 px-2 py-2' : 'h-16 px-4 gap-6'}`}>
       {/* TabNav - Left Section */}
       <nav className="flex gap-1" role="tablist" aria-label="Main navigation">
         {tabs.map((tab) => (
@@ -296,7 +299,7 @@ export const TopBar: React.FC<TopBarProps> = ({
       </div>
 
       {/* Spacer */}
-      <div className="flex-1" />
+      <div className={compact ? 'basis-full h-0' : 'flex-1'} />
 
       {/* Action Buttons - Right Section */}
       <div className="flex gap-3">

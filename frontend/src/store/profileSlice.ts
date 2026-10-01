@@ -385,6 +385,9 @@ export const createProfileSlice: StateCreator<
             const { printerProfiles } = get();
             const parentProfile = printerProfiles.find(p => p.name === inheritsName);
             if (parentProfile && parentProfile.manufacturer && parentProfile.filename) {
+              // User configs carry no manufacturer, which left the
+              // process/filament pickers disabled on a fresh session.
+              if (!get().selectedManufacturer) set({ selectedManufacturer: parentProfile.manufacturer });
               const parentResp = await fetch(
                 `/api/profiles/${parentProfile.manufacturer}/${parentProfile.category}/${encodeURIComponent(parentProfile.filename)}/resolved`,
                 { headers: authHeader }

@@ -21,13 +21,13 @@ import {
 } from '../LeftPanel';
 import { useStore } from '../../store';
 
-export const LeftPanel: React.FC = () => {
+export const LeftPanel: React.FC<{ fullWidth?: boolean }> = ({ fullWidth = false }) => {
   const { selectedPrinterProfile } = useStore();
   const [configDialogOpen, setConfigDialogOpen] = useState(false);
 
   return (
     <aside 
-      className="w-[480px] min-h-0 bg-gray-800 border-r border-gray-700 overflow-hidden flex-shrink-0 flex flex-col"
+      className={`${fullWidth ? 'w-full' : 'w-[480px]'} min-h-0 bg-gray-800 border-r border-gray-700 overflow-hidden flex-shrink-0 flex flex-col`}
       aria-label="Configuration panel"
     >
       <div className="p-4 space-y-3 flex-shrink-0">
